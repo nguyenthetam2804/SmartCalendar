@@ -8,7 +8,6 @@ from db_simple import analyze_workload, handle_delete_task, handle_reschedule_sp
 from scheduler import auto_schedule
 import scheduler
 
-api_key = os.environ.get("GROQ_API_KEY") or st.secrets.get("GROQ_API_KEY", "") if "st" in globals() else ""
 #client = Groq(api_key="")
 
 def ask_groq(email_content: str) -> Optional[dict]:
