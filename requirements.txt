@@ -1,0 +1,15 @@
+# --- GIAO DIỆN & ĐIỀU PHỐI HỆ THỐNG ---
+streamlit
+pandas
+schedule
+python-dotenv
+
+# --- KẾT NỐI API GOOGLE (GMAIL + CALENDAR) ---
+google-api-python-client
+google-auth-httplib2
+google-auth-oauthlib
+
+# --- ENGINE LÝ LUẬN AI Agent ---
+groq
+google-generativeai
+#pip install -r requirements.txt

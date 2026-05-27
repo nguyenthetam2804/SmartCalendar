@@ -1,0 +1,3 @@
+Bước 1: Cài đặt toàn bộ môi trường (Thư viện) : pip install -r requirements.txt
+Bước 2: Thêm file cấu hình bảo mật (credentials.json và .env)
+Google Credentials: Tải file credentials.json từ Google Cloud Console ( mà mail ae gửi t) rồi ném vào thư mục gốc của dự án.
