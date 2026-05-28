@@ -71,7 +71,7 @@ with st.sidebar:
     st.markdown("---")
     
     st.subheader("📊 Sức khỏe Agent")
-    st.metric(label="Chỉ số sinh học Cortisol", value=f"{current_cortisol} %")
+    st.sidebar.metric(label="Chỉ số sinh học Cortisol", value=f"{current_cortisol} %")
     st.success("🟢 Google Cloud API: Connected")
     st.info("⚡ Groq Llama 3.1: Active")
     
@@ -111,8 +111,8 @@ if "Trang chủ" in menu:
     col_gmail_btn, col_tasks_btn, col_space = st.columns([1, 1, 2])
     
     with col_gmail_btn:
-        if st.button("📨 Quét & Đồng bộ Mail", use_container_width=True, type="secondary"):
-            with st.spinner("Gmail Worker đang đọc hòm thư..."):
+        if st.button("🔄 Quét và Đồng bộ Gmail", use_container_width=True, type="primary"):
+            with st.spinner("Gmail Worker đang đọc hòm thư chưa đọc..."):
                 try:
                     from mail_worker import GmailWorker
                     worker = GmailWorker()
@@ -123,34 +123,102 @@ if "Trang chủ" in menu:
                     else:
                         success_count = 0
                         for email in new_emails:
-                            chat_payload = f"Thêm công việc từ email. Tiêu đề: {email['subject']}. Nội dung: {email['body']}"
-                            ai_result = run_agent(chat_payload)
-                            if isinstance(ai_result, dict) and ai_result.get("status") == "success":
+                            subject_mail = str(email['subject']).replace("[", "").replace("]", "").strip()
+                            body_mail = str(email['body']).strip()
+                            
+                            short_title = subject_mail if len(subject_mail) <= 50 else subject_mail[:47] + "..."
+                            db_updated = False
+                            
+                            try:
+                                direct_prompt = f"Thêm việc {short_title}"
+                                ai_result = run_agent(direct_prompt)
+                                
+                                with sqlite3.connect('agent_storage.db') as test_conn:
+                                    test_cursor = test_conn.cursor()
+                                    test_cursor.execute("SELECT COUNT(*) FROM TASKS WHERE TITLE = ?", (short_title,))
+                                    if test_cursor.fetchone()[0] > 0:
+                                        db_updated = True
+                            except Exception:
+                                db_updated = False
+                                
+                            if not db_updated:
+                                try:
+                                    import re
+                                    with sqlite3.connect('agent_storage.db') as conn:
+                                        cursor = conn.cursor()
+                                        
+                                        date_match = re.search(r'(\d{1,2})/(\d{1,2})', body_mail)
+                                        current_year = datetime.now().year
+                                        
+                                        time_matches = re.findall(r'(\d{1,2})h(\d{2})?|(\d{1,2}):(\d{2})', body_mail)
+                                        extracted_times = []
+                                        for match in time_matches:
+                                            if match[0]: h, m = int(match[0]), (int(match[1]) if match[1] else 0)
+                                            elif match[2]: h, m = int(match[2]), (int(match[3]) if match[3] else 0)
+                                            extracted_times.append(f"{h:02d}:{m:02d}")
+                                        
+                                        if date_match or extracted_times:
+                                            target_day = f"{current_year}-{int(date_match.group(2)):02d}-{int(date_match.group(1)):02d}" if date_match else (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
+                                            fake_deadline = f"{target_day} 23:59"
+                                            
+                                            if len(extracted_times) >= 2:
+                                                start_time_str, end_time_str = extracted_times[0], extracted_times[1]
+                                            elif len(extracted_times) == 1:
+                                                start_time_str = extracted_times[0]
+                                                start_dt = datetime.strptime(f"{target_day} {start_time_str}", '%Y-%m-%d %H:%M')
+                                                end_time_str = (start_dt + timedelta(hours=1, minutes=30)).strftime('%H:%M')
+                                            else:
+                                                slots = [("08:00", "10:00"), ("10:00", "12:00"), ("14:00", "16:00"), ("16:00", "18:00"), ("19:00", "21:00")]
+                                                selected_start, selected_end = "09:00", "11:00"
+                                                for start_h, end_h in slots:
+                                                    if cursor.execute("SELECT COUNT(*) FROM SESSIONS WHERE START_TIME = ?", (f"{target_day} {start_h}",)).fetchone()[0] == 0:
+                                                        selected_start, selected_end = start_h, end_h
+                                                        break
+                                                start_time_str, end_time_str = selected_start, selected_end
+                                                
+                                            db_start = f"{target_day} {start_time_str}"
+                                            db_end = f"{target_day} {end_time_str}"
+                                            
+                                            cursor.execute("INSERT INTO TASKS (TITLE, DEADLINE) VALUES (?, ?)", (short_title, fake_deadline))
+                                            last_id = cursor.lastrowid
+                                            cursor.execute("INSERT INTO SESSIONS (TASK_ID, START_TIME, END_TIME) VALUES (?, ?, ?)", (last_id, db_start, db_end))
+                                        else:
+                                            cursor.execute("INSERT INTO TASKS (TITLE, DEADLINE) VALUES (?, ?)", (short_title, None))
+                                            
+                                        conn.commit()
+                                    db_updated = True
+                                except Exception as db_direct_err:
+                                    st.sidebar.error(f"🚨 Lỗi ép ghi SQLite: {db_direct_err}")
+                            
+                            if db_updated:
                                 success_count += 1
                                 worker.mark_as_read(email['id'])
-                        
+                                
                         if success_count > 0:
-                            st.success(f"🎯 AI Agent đã xử lý thành công {success_count} email công việc!")
+                            st.success(f"🎯 Hệ thống đã xử lý và phân phối thành công {success_count} email công việc!")
                             st.balloons()
+                            st.rerun()
+                        else:
+                            st.warning("⚠️ Không thể trích xuất tác vụ hợp lệ từ hòm thư.")
                 except Exception as mail_err:
-                    st.error(f"Lỗi luồng Gmail: {mail_err}")
+                    st.error(f"Lỗi kết nối hoặc đồng bộ luồng Gmail: {mail_err}")
                     
     with col_tasks_btn:
-        if st.button("🚀 Đẩy việc lên Google Tasks", use_container_width=True, type="secondary"):
+        if st.button("🎯 Đồng bộ Google Tasks", use_container_width=True):
             with st.spinner("Đang gom tác vụ tự động để đẩy lên Cloud..."):
                 try:
                     from sync_tasks import sync_null_deadline_tasks
                     sync_null_deadline_tasks()
-                    st.success("🎯 Đã đồng bộ thành công các công việc lên ứng dụng Google Tasks Cloud!")
-                    st.balloons()
-                    st.toast("Kiểm tra Google Tasks trên điện thoại của bạn ngay nhé!")
+                    st.success("✅ Đã đồng bộ các công việc không có hạn chót lên Google Tasks!")
+                    st.toast("🎯 Kiểm tra danh sách việc cần làm trên Google Tasks của bạn!")
+                    st.rerun()
                 except Exception as tasks_err:
                     st.error(f"Lỗi khi đồng bộ lên Google Tasks: {tasks_err}")
-    
+                    
     st.markdown("---")
     
     # ─────────────────────────────────────────────────────────────────
-    # 🔥 GIỮ NGUYÊN LOGIC QUÉT TOÀN BỘ TUẦN TỪ THỨ 2 ĐẾN CHỦ NHẬT THEO Ý TÂM
+    # BẢNG HIỂN THỊ TUẦN AN TOÀN TUYỆT ĐỐI (CHỐNG LỖI INDEX OUT OF RANGE)
     # ─────────────────────────────────────────────────────────────────
     total_tasks = 0
     scheduled_count = 0
@@ -158,13 +226,12 @@ if "Trang chủ" in menu:
 
     try:
         conn = sqlite3.connect('agent_storage.db')
-        total_tasks = pd.read_sql_query("SELECT COUNT(*) FROM TASKS", conn).iloc[0,0]
+        total_tasks = conn.execute("SELECT COUNT(*) FROM TASKS").fetchone()[0]
         
         now = datetime.now()
         start_of_week = (now - timedelta(days=now.weekday())).strftime('%Y-%m-%d 00:00')
         end_of_week = (now + timedelta(days=(6 - now.weekday()))).strftime('%Y-%m-%d 23:59')
         
-        # Câu truy vấn ưu tiên việc có deadline gần nhất đứng trước, xếp từ sáng đến tối
         query = """
             SELECT T.TITLE as 'Tên công việc', 
                    IFNULL(S.START_TIME, '⏳ Chờ AI xếp lịch chi tiết') as raw_start, 
@@ -182,8 +249,6 @@ if "Trang chủ" in menu:
         scheduled_count = cursor.fetchone()[0]
         conn.close()
         
-        # Chỉ xử lý bóc tách nếu DataFrame nhận được dữ liệu (Chống lỗi trống lịch)
-# Chỉ xử lý bóc tách nếu DataFrame nhận được dữ liệu (Chống lỗi trống lịch)
         if df_raw is not None and not df_raw.empty:
             df_week['Tên công việc'] = df_raw['Tên công việc']
             days_list = []
@@ -193,20 +258,17 @@ if "Trang chủ" in menu:
                 st_time = str(row['raw_start']).strip()
                 en_time = str(row['raw_end']).strip()
                 
-                # Khắc phục lỗi 'Chờ AI xếp lịch chi tiết' hoặc chuỗi không đúng định dạng
-                if ' ' in st_time and ' ' in en_time:
+                if ' ' in st_time and ' ' in en_time and '⏳' not in st_time:
                     try:
-                        # Tách chuỗi an toàn
                         st_parts = st_time.split(' ')
                         en_parts = en_time.split(' ')
                         
-                        # 🛡️ KIỂM TRA AN TOÀN INDEX TRƯỚC KHI TRUY CẬP [1]
                         if len(st_parts) >= 2 and len(en_parts) >= 2:
                             date_part = st_parts[0]
                             time_part = f"{st_parts[1]} ➔ {en_parts[1]}"
                         else:
-                            date_part = "📅 Lỗi chuỗi"
-                            time_part = "⏳ Format giờ sai"
+                            date_part = "📅 Đang chờ ca"
+                            time_part = "⏳ Chờ xếp lịch"
                     except Exception:
                         date_part = "📅 Lỗi xử lý"
                         time_part = "⏳ Chưa rõ giờ"
@@ -249,9 +311,6 @@ if "Trang chủ" in menu:
     st.subheader(f"📅 Kế hoạch chi tiết từ Thứ Hai đến Chủ Nhật")
     st.caption(f"Khoảng thời gian đồng bộ: T2 ({start_of_week[:10]}) ➔ CN ({end_of_week[:10]})")
     
-    # ─────────────────────────────────────────────────────────────────
-    # 🔥 KIỂM TRA ĐIỀU KIỆN AN TOÀN: NẾU TRỐNG LỊCH THÌ HIỂN THỊ THÔNG BÁO, KHÔNG CRASH
-    # ─────────────────────────────────────────────────────────────────
     if df_week is not None and not df_week.empty:
         st.dataframe(df_week, use_container_width=True, hide_index=True)
     else:
@@ -303,19 +362,24 @@ elif "Phân tích & Đánh giá" in menu:
         date_str = target_date.strftime('%Y-%m-%d')
         
         with st.spinner(f"Đang bốc tách dữ liệu và khởi tạo luồng đánh giá cho ngày {date_str}..."):
-            status = analyze_workload(date_str)
-            ai_analyze_prompt = f"Hành động: 'analyze'. Ngày cần phân tích: {date_str}. Trạng thái thô từ DB: {status}"
-            analysis_result = run_agent(ai_analyze_prompt)
-            
-            st.markdown("### 📋 Kết quả báo cáo từ AI Agent")
-            st.divider()
-            
-            if isinstance(analysis_result, dict) and "message" in analysis_result:
-                st.info(f"💡 **Nhận xét lịch trình:** {analysis_result['message']}")
-            else:
-                st.info(f"💡 **Nhận xét lịch trình:** {status}")
+            try:
+                status = analyze_workload(date_str)
+                ai_analyze_prompt = f"Đánh giá lịch ngày {date_str}. Dữ liệu các ca làm việc hiện tại từ Database: {status}. Hãy phân tích mật độ và đưa ra nhận xét khoa học."
+                analysis_result = run_agent(ai_analyze_prompt)
                 
-            st.success("✓ Báo cáo mật độ đã được tối ưu hóa thành công!")
+                st.markdown("### 📋 Kết quả báo cáo từ AI Agent")
+                st.divider()
+                
+                if isinstance(analysis_result, dict) and "message" in analysis_result:
+                    st.info(f"💡 **Nhận xét lịch trình:** {analysis_result['message']}")
+                elif isinstance(analysis_result, str) and len(analysis_result) > 10:
+                    st.info(f"💡 **Nhận xét lịch trình:** {analysis_result}")
+                else:
+                    st.info(f"💡 **Nhận xét lịch trình:** {status}")
+                    
+                st.success("✓ Báo cáo mật độ đã được tối ưu hóa thành công!")
+            except Exception as eval_err:
+                st.error(f"Lỗi trong quá trình phân tích dữ liệu: {eval_err}")
 
 # --- GOOGLE CALENDAR LIVE ---
 elif "Google Calendar Live" in menu:
@@ -363,7 +427,7 @@ elif "Google Tasks Live" in menu:
         except Exception as api_err:
             st.error(f"Không thể kết nối lấy dữ liệu từ Google Tasks: {api_err}")
 
-# --- QUẢN LÝ LỊCH ---
+# --- QUẢN LÝ LỊCH (ĐÃ KHÔI PHỤC THÔNG BÁO LINK CALENDAR) ---
 elif "⚙️ Quản lý Lịch" in menu or "Quản lý Lịch" in menu:
     st.header("⚙️ Điều phối Google Calendar")
     with st.form("calendar_form"):
@@ -387,18 +451,33 @@ elif "⚙️ Quản lý Lịch" in menu or "Quản lý Lịch" in menu:
                 iso_end = (start_datetime + timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%S')
 
                 with st.spinner("Đang đẩy lịch lên Google Calendar..."):
+                    # Hàm create_event chuẩn trả về tuple: (success, result)
                     success, result = create_event(task_name, iso_start, iso_end, description)
+                    
                     if success:
                         try:
                             db_start = start_datetime.strftime('%Y-%m-%d %H:%M')
                             db_end = (start_datetime + timedelta(hours=1)).strftime('%Y-%m-%d %H:%M')
+                            
+                            # Ghi nhận thông tin cục bộ vào SQLite
                             with sqlite3.connect('agent_storage.db') as conn:
                                 cursor = conn.cursor()
                                 cursor.execute("INSERT INTO TASKS (TITLE, DEADLINE) VALUES (?, ?)", (task_name, db_end))
                                 last_id = cursor.lastrowid
                                 cursor.execute("INSERT INTO SESSIONS (TASK_ID, START_TIME, END_TIME) VALUES (?, ?, ?)", (last_id, db_start, db_end))
                                 conn.commit()
-                            st.success("✅ Đã tạo lịch thành công!")
+                            
+                            # 🔥 KHÔI PHỤC THÀNH CÔNG: Hiển thị hộp xanh chứa link HTML dẫn thẳng sang Cloud
+                            st.success("✅ Đã tạo lịch thành công cục bộ!")
+                            
+                            # Kiểm tra định dạng link trả về từ hàm create_event
+                            if isinstance(result, str) and result.startswith("http"):
+                                st.markdown(f"🔗 [👉 Xem sự kiện trên Google Calendar]({result})")
+                            elif isinstance(result, dict) and "htmlLink" in result:
+                                st.markdown(f"🔗 [👉 Xem sự kiện trên Google Calendar]({result['htmlLink']})")
+                            else:
+                                st.info("ℹ️ Lịch đã được đồng bộ lên Cloud của tài khoản Google kết nối.")
+                                
                             st.balloons()
                         except Exception as db_err:
                             st.error(f"Lỗi ghi nhận cục bộ: {db_err}")
