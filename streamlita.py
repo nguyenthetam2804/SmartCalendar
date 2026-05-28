@@ -4,6 +4,8 @@ import sqlite3
 import pandas as pd
 from calendar_service import create_event
 from insert import run_agent
+# Import thêm hàm phân tích từ db_simple của nhóm bạn
+from db_simple import analyze_workload 
 
 # --- KÍCH HOẠT WATCHER CHẠY NGẦM QUÉT DATABASE ---
 try:
@@ -16,135 +18,144 @@ except Exception as watcher_err:
     st.sidebar.error(f"⚠️ Không thể chạy Watcher ngầm: {watcher_err}")
 
 # Cấu hình trang
-st.set_page_config(page_title="AI Planner System", layout="wide")
+st.set_page_config(page_title="AI Planner System", page_icon="🤖", layout="wide")
 
-# --- HÀM TÍNH TOÁN CHỈ SỐ CORTISOL THÔNG MINH ---
 def calculate_dynamic_cortisol():
     cortisol = 40 
     try:
         with sqlite3.connect('agent_storage.db') as conn:
             cursor = conn.cursor()
             now = datetime.now()
+            
             start_of_week = (now - timedelta(days=now.weekday())).strftime('%Y-%m-%d 00:00')
             end_of_week = (now + timedelta(days=(6 - now.weekday()))).strftime('%Y-%m-%d 23:59')
             
+            now_str = now.strftime('%Y-%m-%d %H:%M')
+            two_days_later = (now + timedelta(days=2)).strftime('%Y-%m-%d %H:%M')
+            
             cursor.execute("SELECT COUNT(*) FROM SESSIONS WHERE START_TIME BETWEEN ? AND ?", (start_of_week, end_of_week))
             session_count = cursor.fetchone()[0]
-            cortisol += (session_count * 15)
-            
-            two_days_later = (now + timedelta(days=2)).strftime('%Y-%m-%d %H:%M')
-            now_str = now.strftime('%Y-%m-%d %H:%M')
             
             cursor.execute("SELECT COUNT(*) FROM TASKS WHERE DEADLINE BETWEEN ? AND ?", (now_str, two_days_later))
             urgent_tasks = cursor.fetchone()[0]
-            cortisol += (urgent_tasks * 30)
+            
+            if urgent_tasks <= 3:
+                cortisol += (urgent_tasks * 10)
+            elif urgent_tasks <= 6:
+                cortisol += 30 + ((urgent_tasks - 3) * 20)
+            else:
+                cortisol += 90 + ((urgent_tasks - 6) * 25)
+
+            cortisol += (session_count * 3)
     except:
         pass
     return min(cortisol, 150)
 
+current_cortisol = calculate_dynamic_cortisol()
+
 # --- SIDEBAR DISPLAY ---
 with st.sidebar:
     st.title("🤖 AI Control Center")
-    menu = st.radio("Menu chính", ["Trang chủ", "Chat với Groq", "Google Calendar Live", "Google Tasks Live", "Quản lý Lịch", "Cài đặt"])
-    st.divider()
+    st.markdown("---")
+    menu = st.radio(
+        "Menu điều hướng hệ thống", 
+        [
+            "🏠 Trang chủ", 
+            "💬 Chat với Groq", 
+            "📊 Phân tích & Đánh giá", 
+            "📅 Google Calendar Live", 
+            "🎯 Google Tasks Live", 
+            "⚙️ Quản lý Lịch"
+        ]
+    )
+    st.markdown("---")
     
-    current_cortisol = calculate_dynamic_cortisol()
-    st.metric(label="Chỉ số Cortisol hiện tại", value=f"{current_cortisol} ng/mL")
-    st.success("Google Calendar: Connected")
-    st.warning("Groq API: Connected")
+    st.subheader("📊 Sức khỏe Agent")
+    st.metric(label="Chỉ số sinh học Cortisol", value=f"{current_cortisol} %")
+    st.success("🟢 Google Cloud API: Connected")
+    st.info("⚡ Groq Llama 3.1: Active")
     
-    # ─────────────────────────────────────────────────────────────────
-    # 🔥 ĐÃ SỬA: Thụt lề toàn bộ khu vực này vào trong để đẩy về Sidebar cũ
-    # ─────────────────────────────────────────────────────────────────
-    st.divider()
-    st.subheader("Danger Zone")
-    
-    confirm_delete = st.checkbox("Xác nhận muốn xóa sạch lịch")
+    st.markdown("---")
+    st.subheader("🚨 Xoá dữ liệu")
+    confirm_delete = st.checkbox("Tôi chắc chắn muốn xóa dữ liệu")
     
     if st.button("🗑️ Xóa toàn bộ dữ liệu lịch", use_container_width=True, type="primary", disabled=not confirm_delete):
-        with st.spinner("Đang xử lý xóa dữ liệu cục bộ và đồng bộ Google Tasks..."):
+        with st.spinner("Đang dọn dẹp Database cục bộ và Cloud..."):
             try:
-                # 1. KẾT NỐI DATABASE CỤC BỘ
                 with sqlite3.connect('agent_storage.db') as conn:
                     cursor = conn.cursor()
-                    
-                    # Lấy chính xác các mã GOOGLE_TASK_ID chưa trống trong bảng TASKS
                     cursor.execute("SELECT DISTINCT GOOGLE_TASK_ID FROM TASKS WHERE GOOGLE_TASK_ID IS NOT NULL;")
                     google_task_ids = [row[0] for row in cursor.fetchall()]
                     
-                    # 2. GỌI HÀM XÓA CỦA BẠN TRONG NHÓM (GIỮ NGUYÊN FILE GOOGLE_API)
                     from google_api import delete_google_task
-                    
                     for g_id in google_task_ids:
                         if g_id and not g_id.endswith('@google.com'): 
-                            delete_google_task(g_id)  # Chạy trực tiếp hàm nguyên bản của bạn bạn
+                            delete_google_task(g_id)
                     
-                    # 3. TIẾN HÀNH DỌN DẸP SẠCH DATABASE CỤC BỘ
                     cursor.execute("DELETE FROM SESSIONS;")
                     cursor.execute("DELETE FROM TASKS;")
                     cursor.execute("DELETE FROM sqlite_sequence WHERE name='SESSIONS';")
                     cursor.execute("DELETE FROM sqlite_sequence WHERE name='TASKS';")
                     conn.commit()
                 
-                # 4. THÔNG BÁO VÀ LÀM TƯƠI LẠI GIAO DIỆN
-                st.sidebar.success("🎉 Đã dọn dẹp hệ thống và cập nhật Google Tasks thành công!")
+                st.sidebar.success("🎉 Đã dọn dẹp sạch sẽ hệ thống!")
+                st.snow()
                 st.rerun()
-                
             except Exception as delete_err:
                 st.sidebar.error(f"Lỗi khi thực hiện dọn dẹp: {delete_err}")
 
 # --- TRANG CHỦ ---
-if menu == "Trang chủ":
-    st.header("🏠 Bảng điều khiển")
-    
-    # ─────────────────────────────────────────────────────────────────
-    # 🔥 KHU VỰC ĐỒNG BỘ: GMAIL WORKER & GOOGLE TASKS WORKER
-    # ─────────────────────────────────────────────────────────────────
-    col_title, col_gmail_btn, col_tasks_btn = st.columns([2, 1, 1])
+if "Trang chủ" in menu:
+    st.subheader("🏠 HỆ THỐNG ĐIỀU PHỐI VÀ PHÂN TÍCH LỊCH TRÌNH THÔNG MINH")
+    st.markdown("### ⚡ Thao tác nhanh với các Workers")
+    col_gmail_btn, col_tasks_btn, col_space = st.columns([1, 1, 2])
     
     with col_gmail_btn:
-        if st.button("🔄 Quét và Đồng bộ Gmail", use_container_width=True):
-            with st.spinner("Gmail Worker đang lục hòm thư chưa đọc..."):
+        if st.button("📨 Quét & Đồng bộ Mail", use_container_width=True, type="secondary"):
+            with st.spinner("Gmail Worker đang đọc hòm thư..."):
                 try:
                     from mail_worker import GmailWorker
                     worker = GmailWorker()
                     new_emails = worker.get_new_emails()
                     
                     if not new_emails:
-                        st.toast("📨 Không có email công việc mới nào cần xử lý.")
+                        st.toast("📨 Không có email tác vụ mới nào cần xử lý.")
                     else:
                         success_count = 0
                         for email in new_emails:
                             chat_payload = f"Thêm công việc từ email. Tiêu đề: {email['subject']}. Nội dung: {email['body']}"
                             ai_result = run_agent(chat_payload)
-                            
                             if isinstance(ai_result, dict) and ai_result.get("status") == "success":
                                 success_count += 1
                                 worker.mark_as_read(email['id'])
                         
                         if success_count > 0:
-                            st.success(f"🎯 Agent đã xử lý thành công {success_count} email công việc mới!")
+                            st.success(f"🎯 AI Agent đã xử lý thành công {success_count} email công việc!")
                             st.balloons()
-                        else:
-                            st.warning("⚠️ Đã đọc email nhưng AI không bóc tách được tác vụ phù hợp.")
                 except Exception as mail_err:
-                    st.error(f"Lỗi kết nối hoặc đồng bộ luồng Gmail: {mail_err}")
+                    st.error(f"Lỗi luồng Gmail: {mail_err}")
                     
     with col_tasks_btn:
-        if st.button("🎯 Đồng bộ Google Tasks", use_container_width=True):
-            with st.spinner("Đang lọc việc Deadline = NULL để đẩy lên Google Tasks..."):
+        if st.button("🚀 Đẩy việc lên Google Tasks", use_container_width=True, type="secondary"):
+            with st.spinner("Đang gom tác vụ tự động để đẩy lên Cloud..."):
                 try:
                     from sync_tasks import sync_null_deadline_tasks
                     sync_null_deadline_tasks()
-                    st.success("✅ Đã đồng bộ các công việc không có hạn chót lên Google Tasks!")
-                    st.toast("🎯 Kiểm tra danh sách việc cần làm trên Google Tasks của bạn!")
-                    st.rerun()
-                except ModuleNotFoundError:
-                    st.error("❌ Không tìm thấy file code xử lý đồng bộ. Vui lòng đảm bảo bạn đã lưu file code kia với tên 'sync_tasks.py'")
+                    st.success("🎯 Đã đồng bộ thành công các công việc lên ứng dụng Google Tasks Cloud!")
+                    st.balloons()
+                    st.toast("Kiểm tra Google Tasks trên điện thoại của bạn ngay nhé!")
                 except Exception as tasks_err:
                     st.error(f"Lỗi khi đồng bộ lên Google Tasks: {tasks_err}")
     
-    # --- LOGIC HIỂN THỊ BẢNG TRANG CHỦ ---
+    st.markdown("---")
+    
+    # ─────────────────────────────────────────────────────────────────
+    # 🔥 GIỮ NGUYÊN LOGIC QUÉT TOÀN BỘ TUẦN TỪ THỨ 2 ĐẾN CHỦ NHẬT THEO Ý TÂM
+    # ─────────────────────────────────────────────────────────────────
+    total_tasks = 0
+    scheduled_count = 0
+    df_week = pd.DataFrame()
+
     try:
         conn = sqlite3.connect('agent_storage.db')
         total_tasks = pd.read_sql_query("SELECT COUNT(*) FROM TASKS", conn).iloc[0,0]
@@ -153,50 +164,101 @@ if menu == "Trang chủ":
         start_of_week = (now - timedelta(days=now.weekday())).strftime('%Y-%m-%d 00:00')
         end_of_week = (now + timedelta(days=(6 - now.weekday()))).strftime('%Y-%m-%d 23:59')
         
+        # Câu truy vấn ưu tiên việc có deadline gần nhất đứng trước, xếp từ sáng đến tối
         query = """
             SELECT T.TITLE as 'Tên công việc', 
-                   IFNULL(S.START_TIME, '⚠️ Chưa được xếp ca chi tiết') as 'Khung giờ bắt đầu', 
-                   IFNULL(S.END_TIME, '---') as 'Khung giờ kết thúc',
-                   IFNULL(T.DEADLINE, '--- Không có hạn chót') as 'Hạn chót (Deadline)'
+                   IFNULL(S.START_TIME, '⏳ Chờ AI xếp lịch chi tiết') as raw_start, 
+                   IFNULL(S.END_TIME, '---') as raw_end,
+                   IFNULL(T.DEADLINE, '⚠️ Không có hạn chót') as 'Hạn chót (Deadline)'
             FROM TASKS T
             LEFT JOIN SESSIONS S ON T.TASK_ID = S.TASK_ID
             WHERE (S.START_TIME BETWEEN ? AND ?) OR (S.START_TIME IS NULL)
-            ORDER BY S.START_TIME ASC, T.TASK_ID DESC
+            ORDER BY T.DEADLINE ASC, S.START_TIME ASC
         """
-        df_week = pd.read_sql_query(query, conn, params=(start_of_week, end_of_week))
+        df_raw = pd.read_sql_query(query, conn, params=(start_of_week, end_of_week))
+        
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM SESSIONS WHERE START_TIME BETWEEN ? AND ?", (start_of_week, end_of_week))
+        scheduled_count = cursor.fetchone()[0]
         conn.close()
+        
+        # Chỉ xử lý bóc tách nếu DataFrame nhận được dữ liệu (Chống lỗi trống lịch)
+# Chỉ xử lý bóc tách nếu DataFrame nhận được dữ liệu (Chống lỗi trống lịch)
+        if df_raw is not None and not df_raw.empty:
+            df_week['Tên công việc'] = df_raw['Tên công việc']
+            days_list = []
+            hours_list = []
+            
+            for index, row in df_raw.iterrows():
+                st_time = str(row['raw_start']).strip()
+                en_time = str(row['raw_end']).strip()
+                
+                # Khắc phục lỗi 'Chờ AI xếp lịch chi tiết' hoặc chuỗi không đúng định dạng
+                if ' ' in st_time and ' ' in en_time:
+                    try:
+                        # Tách chuỗi an toàn
+                        st_parts = st_time.split(' ')
+                        en_parts = en_time.split(' ')
+                        
+                        # 🛡️ KIỂM TRA AN TOÀN INDEX TRƯỚC KHI TRUY CẬP [1]
+                        if len(st_parts) >= 2 and len(en_parts) >= 2:
+                            date_part = st_parts[0]
+                            time_part = f"{st_parts[1]} ➔ {en_parts[1]}"
+                        else:
+                            date_part = "📅 Lỗi chuỗi"
+                            time_part = "⏳ Format giờ sai"
+                    except Exception:
+                        date_part = "📅 Lỗi xử lý"
+                        time_part = "⏳ Chưa rõ giờ"
+                else:
+                    date_part = "📅 Đang chờ ca"
+                    time_part = "⏳ Chờ xếp lịch"
+                    
+                days_list.append(date_part)
+                hours_list.append(time_part)
+                    
+            df_week['Ngày thực hiện'] = days_list
+            df_week['Khung giờ chi tiết'] = hours_list
+            df_week['Hạn chót (Deadline)'] = df_raw['Hạn chót (Deadline)']
+            
     except Exception as e:
-        st.error(f"Lỗi truy xuất lịch trình từ Database: {e}")
-        total_tasks = 0
+        st.error(f"⚠️ Lỗi truy xuất lịch trình từ Database: {e}")
         df_week = pd.DataFrame()
 
-    scheduled_count = df_week['Khung giờ kết thúc'].ne('---').sum() if not df_week.empty else 0
-    
+    # --- KHỐI THỐNG KÊ HIỆU SUẤT VÀ TRẠNG THÁI TUẦN ---
+    st.markdown("### 📊 Tổng quan hiệu suất tuần này")
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric(label="Tổng công việc hệ thống", value=total_tasks)
+        st.info("📦 **Tổng công việc hệ thống**")
+        st.markdown(f"## {total_tasks} công việc")
     with col2:
-        st.metric(label="Khung giờ làm việc (Thứ 2 - CN)", value=scheduled_count)
+        st.success("📆 **Số ca làm việc (Sessions)**")
+        st.markdown(f"## {scheduled_count} ca làm")
     with col3:
         if current_cortisol < 70:
-            st.metric(label="Trạng thái cơ thể", value=f"{current_cortisol} 🟢 Thoải mái")
+            st.success("🟢 **Trạng thái: THOẢI MÁI**")
+            st.markdown(f"## {current_cortisol} %")
         elif current_cortisol < 110:
-            st.metric(label="Trạng thái cơ thể", value=f"{current_cortisol} 🟡 Áp lực")
+            st.warning("🟡 **Trạng thái: ÁP LỰC**")
+            st.markdown(f"## {current_cortisol} %")
         else:
-            st.metric(label="Trạng thái cơ thể", value=f"{current_cortisol} 🔴 Quá tải!")
+            st.error("🔴 **Trạng thái: QUÁ TẢI BIẾN ĐỘNG**")
+            st.markdown(f"## {current_cortisol} %")
 
-    st.divider()
-
+    st.markdown("---")
     st.subheader(f"📅 Kế hoạch chi tiết từ Thứ Hai đến Chủ Nhật")
-    st.caption(f"Khoảng thời gian: T2 ({start_of_week[:10]}) ➔ CN ({end_of_week[:10]})")
+    st.caption(f"Khoảng thời gian đồng bộ: T2 ({start_of_week[:10]}) ➔ CN ({end_of_week[:10]})")
     
-    if not df_week.empty:
-        st.dataframe(df_week, width="stretch", hide_index=True)
+    # ─────────────────────────────────────────────────────────────────
+    # 🔥 KIỂM TRA ĐIỀU KIỆN AN TOÀN: NẾU TRỐNG LỊCH THÌ HIỂN THỊ THÔNG BÁO, KHÔNG CRASH
+    # ─────────────────────────────────────────────────────────────────
+    if df_week is not None and not df_week.empty:
+        st.dataframe(df_week, use_container_width=True, hide_index=True)
     else:
-        st.info("Tuần này hoàn toàn trống lịch. Hãy nghỉ ngơi hoặc nạp thêm task mới!")
+        st.info("📅 Tuần này hoàn toàn trống lịch sinh hoạt. Hãy nghỉ ngơi hoặc nạp thêm công việc mới từ hòm thư!")
 
 # --- CHAT VỚI GROK ---
-elif menu == "Chat với Groq":
+elif "Chat với Groq" in menu:
     st.header("💬 Chat với Grok AI Agent")
     if "messages" not in st.session_state:
         st.session_state.messages = []
@@ -226,22 +288,40 @@ elif menu == "Chat với Groq":
                         chuoi_hien_thi += f"❌ **Thất bại:** {ket_qua.get('message')}"
                 else:
                     chuoi_hien_thi = str(ket_qua)
-                    try:
-                        import json
-                        data_loi = json.loads(chuoi_hien_thi)
-                        if isinstance(data_loi, dict):
-                            chuoi_hien_thi = data_loi.get("message") or data_loi.get("title") or chuoi_hien_thi
-                    except:
-                        pass
 
                 st.markdown(chuoi_hien_thi)
                 st.session_state.messages.append({"role": "assistant", "content": chuoi_hien_thi})
 
+# --- TRANG PHÂN TÍCH & ĐÁNH GIÁ ---
+elif "Phân tích & Đánh giá" in menu:
+    st.header("📊 Phân tích & Đánh giá Lịch trình")
+    st.write("Hệ thống hỗ trợ quét mật độ công việc dựa trên dữ liệu thời gian thực từ Database cục bộ.")
+    
+    target_date = st.date_input("📅 Chọn ngày bạn muốn AI Agent đánh giá mật độ:", datetime.now().date())
+    
+    if st.button("🔍 Tiến hành phân tích bằng AI", use_container_width=True, type="primary"):
+        date_str = target_date.strftime('%Y-%m-%d')
+        
+        with st.spinner(f"Đang bốc tách dữ liệu và khởi tạo luồng đánh giá cho ngày {date_str}..."):
+            status = analyze_workload(date_str)
+            ai_analyze_prompt = f"Hành động: 'analyze'. Ngày cần phân tích: {date_str}. Trạng thái thô từ DB: {status}"
+            analysis_result = run_agent(ai_analyze_prompt)
+            
+            st.markdown("### 📋 Kết quả báo cáo từ AI Agent")
+            st.divider()
+            
+            if isinstance(analysis_result, dict) and "message" in analysis_result:
+                st.info(f"💡 **Nhận xét lịch trình:** {analysis_result['message']}")
+            else:
+                st.info(f"💡 **Nhận xét lịch trình:** {status}")
+                
+            st.success("✓ Báo cáo mật độ đã được tối ưu hóa thành công!")
+
 # --- GOOGLE CALENDAR LIVE ---
-elif menu == "Google Calendar Live":
+elif "Google Calendar Live" in menu:
     st.header("📅 Giao diện xem lịch trực tiếp")
     from calendar_service import get_logged_in_user_email
-    with st.spinner("Đang kiểm tra thông tin tài khoản Google..."):
+    with st.spinner("Đang kết nối tài khoản Google Cloud..."):
         user_email = get_logged_in_user_email()
 
     if user_email:
@@ -252,12 +332,10 @@ elif menu == "Google Calendar Live":
     else:
         st.warning("⚠️ Hệ thống chưa nhận diện được phiên đăng nhập Google Calendar của bạn.")
 
-# --- GIAO DIỆN KIỂM TRA GOOGLE TASKS LIVE ---
-elif menu == "Google Tasks Live":
+# --- GOOGLE TASKS LIVE ---
+elif "Google Tasks Live" in menu:
     st.header("🎯 Danh sách việc cần làm (Google Tasks Cloud)")
-    st.write("Dưới đây là các tác vụ không có deadline đang lưu trữ thời gian thực trên ứng dụng Google Tasks của bạn.")
-    
-    if st.button("🔄 Làm mới dữ liệu từ Google", use_container_width=True):
+    if st.button("🔄 Làm mới dữ liệu đám mây", use_container_width=True):
         st.rerun()
         
     with st.spinner("Hệ thống đang đồng bộ dữ liệu trực tiếp từ Google API..."):
@@ -280,20 +358,14 @@ elif menu == "Google Tasks Live":
                         "Hạn chót thiết làm": due_date,
                         "Trạng thái": "⏳ Đang thực hiện"
                     })
-                
                 df_tasks = pd.DataFrame(tasks_data)
                 st.dataframe(df_tasks, use_container_width=True, hide_index=True)
-                
         except Exception as api_err:
             st.error(f"Không thể kết nối lấy dữ liệu từ Google Tasks: {api_err}")
-            st.info("💡 Mẹo: Hãy kiểm tra chắc chắn bạn đã kích hoạt Google Tasks API trên Google Cloud Console!")
 
 # --- QUẢN LÝ LỊCH ---
-# --- QUẢN LÝ LỊCH ---
-elif menu == "Quản lý Lịch":
-    st.header("📅 Điều phối Google Calendar")
-    
-    # Bắt đầu form
+elif "⚙️ Quản lý Lịch" in menu or "Quản lý Lịch" in menu:
+    st.header("⚙️ Điều phối Google Calendar")
     with st.form("calendar_form"):
         col_a, col_b = st.columns(2)
         with col_a:
@@ -304,8 +376,6 @@ elif menu == "Quản lý Lịch":
             start_time = st.time_input("Giờ bắt đầu")
             
         description = st.text_area("Mô tả chi tiết")
-        
-        # 🚨 ĐẢM BẢO: Dòng này phải được thụt lề (Tab) nằm TRONG khối "with st.form"
         submitted = st.form_submit_button("Lưu vào Google Calendar và Đồng bộ Hệ thống")
         
         if submitted:
@@ -316,7 +386,7 @@ elif menu == "Quản lý Lịch":
                 iso_start = start_datetime.strftime('%Y-%m-%dT%H:%M:%S')
                 iso_end = (start_datetime + timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%S')
 
-                with st.spinner("Đang đẩy lịch lên Google Calendar và ghi nhận dữ liệu..."):
+                with st.spinner("Đang đẩy lịch lên Google Calendar..."):
                     success, result = create_event(task_name, iso_start, iso_end, description)
                     if success:
                         try:
@@ -329,6 +399,7 @@ elif menu == "Quản lý Lịch":
                                 cursor.execute("INSERT INTO SESSIONS (TASK_ID, START_TIME, END_TIME) VALUES (?, ?, ?)", (last_id, db_start, db_end))
                                 conn.commit()
                             st.success("✅ Đã tạo lịch thành công!")
+                            st.balloons()
                         except Exception as db_err:
                             st.error(f"Lỗi ghi nhận cục bộ: {db_err}")
                     else:

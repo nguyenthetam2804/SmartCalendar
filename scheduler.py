@@ -189,16 +189,16 @@ def auto_schedule(db_path: str = DB_PATH) -> dict:
     today = date.today()
 
     cursor.execute("""
-        SELECT T.TASK_ID, T.TITLE, T.DEADLINE,
-               COUNT(S.SESSION_ID) AS session_count,
-               T.SESSIONS_NEEDED
-        FROM TASKS T
-        LEFT JOIN SESSIONS S ON T.TASK_ID = S.TASK_ID
-        WHERE T.DEADLINE IS NOT NULL   
-        GROUP BY T.TASK_ID
-        HAVING session_count < T.SESSIONS_NEEDED
-        ORDER BY date(T.DEADLINE)
-    """)
+            SELECT T.TASK_ID, T.TITLE, T.DEADLINE,
+                   COUNT(S.SESSION_ID) AS session_count,
+                   T.SESSIONS_NEEDED
+            FROM TASKS T
+            LEFT JOIN SESSIONS S ON T.TASK_ID = S.TASK_ID
+            WHERE T.DEADLINE IS NOT NULL   
+            GROUP BY T.TASK_ID
+            HAVING session_count < T.SESSIONS_NEEDED
+            ORDER BY T.DEADLINE ASC, T.TASK_ID ASC
+        """)
 
     tasks = cursor.fetchall()  
 
