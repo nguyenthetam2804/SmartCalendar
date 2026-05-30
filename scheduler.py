@@ -7,13 +7,13 @@ DB_PATH = "agent_storage.db"
 SESSION_HOURS = 3          
 MAX_SESSIONS_PER_DAY = 5   
 
+# Khung giờ nghỉ/bận cố định
 FORBIDDEN_RANGES = [
     (0, 4),   
     (6, 7),   
     (11, 13),  
     (19, 20),  
 ]
-VALID_START_HOURS = [7, 8, 9, 10, 13, 14, 15, 16, 17, 18]
 
 def _is_forbidden(hour: int) -> bool:
     for (s, e) in FORBIDDEN_RANGES:
@@ -21,121 +21,66 @@ def _is_forbidden(hour: int) -> bool:
             return True
     return False
 
+def _get_free_slots_in_day(cursor, target_date: date, pending_sessions: list[dict]) -> list[tuple[datetime, datetime]]:
+    """
+    Quét chi tiết từng block 1 tiếng trong ngày để tìm khoảng trống thực tế
+    """
+    free_slots = []
+    start_hour = 0
+    
+    while start_hour < 24:
+        if _is_forbidden(start_hour):
+            start_hour += 1
+            continue
+            
+        slot_start = datetime(target_date.year, target_date.month, target_date.day, start_hour, 0)
+        slot_end = slot_start + timedelta(hours=1)
+        
+        slot_start_str = slot_start.strftime("%Y-%m-%d %H:%M")
+        slot_end_str = slot_end.strftime("%Y-%m-%d %H:%M")
+        
+        # Kiểm tra DB trùng lịch
+        cursor.execute("""
+            SELECT 1 FROM SESSIONS
+            WHERE NOT (END_TIME <= ? OR START_TIME >= ?)
+            LIMIT 1
+        """, (slot_start_str, slot_end_str))
+        
+        if cursor.fetchone():
+            start_hour += 1
+            continue
+            
+        # Kiểm tra hàng đợi pending trùng lịch
+        is_pending_overlap = False
+        for ps in pending_sessions:
+            ps_start = datetime.strptime(ps["start"], "%Y-%m-%d %H:%M")
+            ps_end = datetime.strptime(ps["end"], "%Y-%m-%d %H:%M")
+            if not (slot_end <= ps_start or slot_start >= ps_end):
+                is_pending_overlap = True
+                break
+                
+        if is_pending_overlap:
+            start_hour += 1
+            continue
+            
+        free_slots.append((slot_start, slot_end))
+        start_hour += 1
+        
+    return free_slots
 
-def _valid_starts_for_day(day: date) -> list[datetime]:
-    result = []
-    for h in VALID_START_HOURS:
-        end_h = h + SESSION_HOURS
-        blocked = any(_is_forbidden(t) for t in range(h, end_h))
-        if not blocked:
-            result.append(datetime(day.year, day.month, day.day, h, 0))
-    return result
-
-
-def _sessions_on_day(cursor, target_date: date) -> list[dict]:
-    d_str = target_date.strftime("%Y-%m-%d")
-    cursor.execute("""
-        SELECT SESSION_ID, TASK_ID, START_TIME, END_TIME
-        FROM SESSIONS
-        WHERE date(START_TIME) = ?
-        ORDER BY START_TIME
-    """, (d_str,))
-    rows = cursor.fetchall()
-    return [{"session_id": r[0], "task_id": r[1],
-             "start": r[2], "end": r[3]} for r in rows]
-
-
-def _is_overlap_dt(start1: datetime, end1: datetime,
-                   start2: datetime, end2: datetime) -> bool:
-    return not (end1 <= start2 or start1 >= end2)
-
-
-def _slot_is_free(cursor, start_dt: datetime, end_dt: datetime,
-                  pending_sessions: list[dict]) -> bool:
-    start_s = start_dt.strftime("%Y-%m-%d %H:%M")
-    end_s = end_dt.strftime("%Y-%m-%d %H:%M")
-
-    cursor.execute("""
-        SELECT 1 FROM SESSIONS
-        WHERE NOT (END_TIME <= ? OR START_TIME >= ?)
-        LIMIT 1
-    """, (start_s, end_s))
-    if cursor.fetchone():
-        return False
-
-    for ps in pending_sessions:
-        ps_start = datetime.strptime(ps["start"], "%Y-%m-%d %H:%M")
-        ps_end = datetime.strptime(ps["end"], "%Y-%m-%d %H:%M")
-        if _is_overlap_dt(start_dt, end_dt, ps_start, ps_end):
-            return False
-
-    return True
-
-def _compute_start_day(deadline: Optional[str],
-                       urgency_rank: int,
-                       total_tasks: int,
-                       today: date) -> date:
-    if not deadline:
-        return today + timedelta(days=urgency_rank + 1)
-
-    try:
-        dl = datetime.strptime(deadline[:10], "%Y-%m-%d").date()
-    except ValueError:
-        return today + timedelta(days=urgency_rank + 1)
-
-    days_left = (dl - today).days
-    if days_left <= 0:
-        return today  
-    if total_tasks <= 1:
-        offset = 0
-    else:
-        ratio = urgency_rank / (total_tasks - 1)  
-        max_offset = max(0, days_left - 1)
-        offset = int(ratio * max_offset)
-
-    return today + timedelta(days=offset)
-
-def _find_free_day(cursor,
-                   from_day: date,
-                   deadline_day: Optional[date],
-                   pending_sessions: list[dict],
-                   look_ahead: int = 60) -> Optional[date]:
-    limit = deadline_day if deadline_day else (from_day + timedelta(days=look_ahead))
-
+def _find_free_day(cursor, from_day: date, deadline_day: Optional[date], pending_sessions: list[dict], look_ahead: int = 60) -> Optional[date]:
+    # FIX 1: Không khóa chết tiến trình ở deadline_day nữa để tránh mất lịch khi sát nút.
+    # Cho phép hệ thống quét tìm slot thoải mái trong khoảng look_ahead ngày.
+    limit = from_day + timedelta(days=look_ahead)
     d = from_day
     while d <= limit:
-        existing = _sessions_on_day(cursor, d)
-        pending_today = sum(
-            1 for ps in pending_sessions
-            if ps["start"].startswith(d.strftime("%Y-%m-%d"))
-        )
-        if len(existing) + pending_today < MAX_SESSIONS_PER_DAY:
+        cursor.execute("SELECT COUNT(*) FROM SESSIONS WHERE date(START_TIME) = ?", (d.strftime("%Y-%m-%d"),))
+        existing_count = cursor.fetchone()[0] or 0
+        pending_today = sum(1 for ps in pending_sessions if ps["start"].startswith(d.strftime("%Y-%m-%d")))
+        
+        if existing_count + pending_today < MAX_SESSIONS_PER_DAY:
             return d
         d += timedelta(days=1)
-
-    cursor.execute("""
-        SELECT DISTINCT date(T.DEADLINE)
-        FROM TASKS T
-        JOIN SESSIONS S ON T.TASK_ID = S.TASK_ID
-        WHERE date(T.DEADLINE) BETWEEN ? AND ?
-        ORDER BY date(T.DEADLINE)
-    """, (from_day.strftime("%Y-%m-%d"), limit.strftime("%Y-%m-%d")))
-
-    expiry_dates = [row[0] for row in cursor.fetchall() if row[0]]
-
-    for ed_str in expiry_dates:
-        ed = datetime.strptime(ed_str, "%Y-%m-%d").date()
-        candidate = ed + timedelta(days=1)
-        if candidate > limit:
-            continue
-        existing = _sessions_on_day(cursor, candidate)
-        pending_today = sum(
-            1 for ps in pending_sessions
-            if ps["start"].startswith(candidate.strftime("%Y-%m-%d"))
-        )
-        if len(existing) + pending_today < MAX_SESSIONS_PER_DAY:
-            return candidate
-
     return None
 
 def _schedule_one_task(cursor,
@@ -154,30 +99,74 @@ def _schedule_one_task(cursor,
 
     new_sessions = []
     current_day = start_day
-    remaining = sessions_needed
+    
+    # Quy đổi tổng số giờ cần phân bổ (Ví dụ: 3 sessions * 3h = 9 giờ cần xếp)
+    hours_needed = sessions_needed * SESSION_HOURS 
 
-    while remaining > 0:
-        free_day = _find_free_day(cursor, current_day, dl_date,
-                                   pending_sessions + new_sessions)
+    while hours_needed > 0:
+        free_day = _find_free_day(cursor, current_day, dl_date, pending_sessions + new_sessions)
         if free_day is None:
-            return []
+            break
 
-        valid_starts = _valid_starts_for_day(free_day)
-        placed = False
-        for s_dt in valid_starts:
-            e_dt = s_dt + timedelta(hours=SESSION_HOURS)
-            all_pending = pending_sessions + new_sessions
-            if _slot_is_free(cursor, s_dt, e_dt, all_pending):
+        day_free_slots = _get_free_slots_in_day(cursor, free_day, pending_sessions + new_sessions)
+        
+        if not day_free_slots:
+            current_day = free_day + timedelta(days=1)
+            continue
+
+        # Đặt giới hạn giờ làm việc của công việc này trong ngày để bắt buộc CHIA ĐỀU LỊCH
+        if dl_date:
+            days_left = (dl_date - free_day).days
+            if days_left <= 1:
+                max_hours_today = 6   # Sát hạn: Cho phép làm tối đa 6 tiếng/ngày (2 sessions)
+            elif hours_needed >= days_left * 4:
+                max_hours_today = 6   # Gấp: Tối đa 6 tiếng/ngày
+            else:
+                max_hours_today = 3   # Thong thả: ÉP LÀM ĐÚNG 3 TIẾNG/NGÀY rồi nhảy sang ngày khác
+        else:
+            max_hours_today = 3
+
+        current_session_start = None
+        current_session_end = None
+        hours_contributed_today = 0
+        
+        for slot_start, slot_end in day_free_slots:
+            if hours_needed <= 0 or hours_contributed_today >= max_hours_today:
+                break
+                
+            if current_session_start is None:
+                current_session_start = slot_start
+                current_session_end = slot_end
+            elif slot_start == current_session_end:
+                current_session_end = slot_end
+            else:
+                # Bị ngắt quãng do dính khung giờ cấm -> Chốt session cũ
+                # FIX 2: Chỉ lưu nếu session nối dài này bõ công làm (Tối thiểu >= 1 tiếng)
+                duration = (current_session_end - current_session_start).total_seconds() / 3600
+                if duration >= 1.0:
+                    new_sessions.append({
+                        "task_id": task_id,
+                        "start": current_session_start.strftime("%Y-%m-%d %H:%M"),
+                        "end": current_session_end.strftime("%Y-%m-%d %H:%M")
+                    })
+                current_session_start = slot_start
+                current_session_end = slot_end
+                
+            hours_needed -= 1
+            hours_contributed_today += 1
+
+        # Chốt khối thời gian cuối cùng của ngày hôm nay
+        if current_session_start and current_session_end:
+            duration = (current_session_end - current_session_start).total_seconds() / 3600
+            if duration >= 1.0:
                 new_sessions.append({
                     "task_id": task_id,
-                    "start": s_dt.strftime("%Y-%m-%d %H:%M"),
-                    "end": e_dt.strftime("%Y-%m-%d %H:%M"),
+                    "start": current_session_start.strftime("%Y-%m-%d %H:%M"),
+                    "end": current_session_end.strftime("%Y-%m-%d %H:%M")
                 })
-                remaining -= 1
-                placed = True
-                if remaining == 0:
-                    break
 
+        # BẮT BUỘC: Xử lý xong ngày hiện tại là phải nhảy sang ngày hôm sau ngay
+        # để đảm bảo phân rã đều lịch ra, không dồn cục một ngày
         current_day = free_day + timedelta(days=1)
 
     return new_sessions
@@ -185,21 +174,19 @@ def _schedule_one_task(cursor,
 def auto_schedule(db_path: str = DB_PATH) -> dict:
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
-
     today = date.today()
 
     cursor.execute("""
-            SELECT T.TASK_ID, T.TITLE, T.DEADLINE,
-                   COUNT(S.SESSION_ID) AS session_count,
-                   T.SESSIONS_NEEDED
-            FROM TASKS T
-            LEFT JOIN SESSIONS S ON T.TASK_ID = S.TASK_ID
-            WHERE T.DEADLINE IS NOT NULL   
-            GROUP BY T.TASK_ID
-            HAVING session_count < T.SESSIONS_NEEDED
-            ORDER BY T.DEADLINE ASC, T.TASK_ID ASC
-        """)
-
+        SELECT T.TASK_ID, T.TITLE, T.DEADLINE,
+               COUNT(S.SESSION_ID) AS session_count,
+               T.SESSIONS_NEEDED
+        FROM TASKS T
+        LEFT JOIN SESSIONS S ON T.TASK_ID = S.TASK_ID
+        WHERE T.DEADLINE IS NOT NULL   
+        GROUP BY T.TASK_ID
+        HAVING session_count < T.SESSIONS_NEEDED
+        ORDER BY date(T.DEADLINE)
+    """)
     tasks = cursor.fetchall()  
 
     if not tasks:
@@ -217,12 +204,21 @@ def auto_schedule(db_path: str = DB_PATH) -> dict:
         if needed <= 0:
             continue
 
+        # Tính ngày bắt đầu phân bổ dựa theo thứ tự ưu tiên deadline
+        def _compute_start_day(deadline: Optional[str], urgency_rank: int, total_tasks: int, today: date) -> date:
+            if not deadline: return today
+            try: dl = datetime.strptime(deadline[:10], "%Y-%m-%d").date()
+            except ValueError: return today
+            days_left = (dl - today).days
+            if days_left <= 0: return today  
+            offset = 0 if total_tasks <= 1 else int((urgency_rank / (total_tasks - 1)) * max(0, days_left - 1))
+            return today + timedelta(days=offset)
+
         start_day = _compute_start_day(deadline, rank, total_tasks, today)
 
-        
         task_logs.append(
             f"[{rank+1}/{total_tasks}] '{title}' | deadline={deadline} "
-            f"| cần {needed} session | dự kiến bắt đầu từ {start_day}"
+            f"| cần phân bổ tiếp {needed * SESSION_HOURS} giờ | dự kiến từ {start_day}"
         )
 
         new_sessions = _schedule_one_task(
@@ -238,12 +234,11 @@ def auto_schedule(db_path: str = DB_PATH) -> dict:
                 "sessions": new_sessions,
             })
             for s in new_sessions:
-                task_logs.append(f"   ✓ Thành công: {s['start']} → {s['end']}")
+                task_logs.append(f"   ✓ Phân bổ thành công: {s['start']} → {s['end']}")
         else:
             result_failed.append({"task_id": task_id, "title": title})
-            task_logs.append(f"Thất bại: '{title}' không tìm thấy slot trống phù hợp.")
+            task_logs.append(f"Thất bại: '{title}' không đủ slot trống.")
 
-    
     for ps in pending_sessions:
         cursor.execute("""
             INSERT INTO SESSIONS (TASK_ID, START_TIME, END_TIME)
