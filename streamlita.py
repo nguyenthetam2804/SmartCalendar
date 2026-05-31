@@ -4,7 +4,6 @@ import sqlite3
 import pandas as pd
 from calendar_service import create_event
 from insert import run_agent
-# Import thêm hàm phân tích từ db_simple của nhóm bạn
 from db_simple import analyze_workload 
 
 # --- KÍCH HOẠT WATCHER CHẠY NGẦM QUÉT DATABASE ---
@@ -217,9 +216,6 @@ if "Trang chủ" in menu:
                     
     st.markdown("---")
     
-    # ─────────────────────────────────────────────────────────────────
-    # BẢNG HIỂN THỊ TUẦN AN TOÀN TUYỆT ĐỐI (CHỐNG LỖI INDEX OUT OF RANGE)
-    # ─────────────────────────────────────────────────────────────────
     total_tasks = 0
     scheduled_count = 0
     df_week = pd.DataFrame()
@@ -316,7 +312,7 @@ if "Trang chủ" in menu:
     else:
         st.info("📅 Tuần này hoàn toàn trống lịch sinh hoạt. Hãy nghỉ ngơi hoặc nạp thêm công việc mới từ hòm thư!")
 
-# --- CHAT VỚI GROK ---
+# --- CHAT VỚI GROQ ---
 elif "Chat với Groq" in menu:
     st.header("💬 Chat với Grok AI Agent")
     if "messages" not in st.session_state:
@@ -427,7 +423,7 @@ elif "Google Tasks Live" in menu:
         except Exception as api_err:
             st.error(f"Không thể kết nối lấy dữ liệu từ Google Tasks: {api_err}")
 
-# --- QUẢN LÝ LỊCH (ĐÃ KHÔI PHỤC THÔNG BÁO LINK CALENDAR) ---
+# --- QUẢN LÝ LỊCH ---
 elif "⚙️ Quản lý Lịch" in menu or "Quản lý Lịch" in menu:
     st.header("⚙️ Điều phối Google Calendar")
     with st.form("calendar_form"):
@@ -451,7 +447,6 @@ elif "⚙️ Quản lý Lịch" in menu or "Quản lý Lịch" in menu:
                 iso_end = (start_datetime + timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%S')
 
                 with st.spinner("Đang đẩy lịch lên Google Calendar..."):
-                    # Hàm create_event chuẩn trả về tuple: (success, result)
                     success, result = create_event(task_name, iso_start, iso_end, description)
                     
                     if success:
@@ -467,7 +462,6 @@ elif "⚙️ Quản lý Lịch" in menu or "Quản lý Lịch" in menu:
                                 cursor.execute("INSERT INTO SESSIONS (TASK_ID, START_TIME, END_TIME) VALUES (?, ?, ?)", (last_id, db_start, db_end))
                                 conn.commit()
                             
-                            # 🔥 KHÔI PHỤC THÀNH CÔNG: Hiển thị hộp xanh chứa link HTML dẫn thẳng sang Cloud
                             st.success("✅ Đã tạo lịch thành công cục bộ!")
                             
                             # Kiểm tra định dạng link trả về từ hàm create_event

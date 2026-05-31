@@ -35,12 +35,10 @@ def create_google_task(title, deadline_str=None):
     
     if deadline_str:
         try:
-            # Google API yêu cầu giờ định dạng RFC 3339 (chứa chữ T và Z)
             dt = datetime.strptime(deadline_str, "%Y-%m-%d %H:%M")
             task_body['due'] = dt.isoformat() + 'Z'
         except Exception:
-            pass # Nếu lỗi định dạng thời gian thì bỏ qua, chỉ tạo tên task
-
+            pass 
     result = service.tasks().insert(tasklist='@default', body=task_body).execute()
     return result.get('id')
 
@@ -62,7 +60,6 @@ def update_google_task_status(google_task_id, status='completed'):
 def get_incomplete_google_tasks():
     """Chỉ lấy về những task chưa hoàn thành từ Google (trạng thái needsAction)"""
     service = get_google_service()
-    # Tham số showCompleted=False sẽ lọc tự động
     results = service.tasks().list(tasklist='@default', showCompleted=False).execute()
     return results.get('items', [])
 def delete_google_task(google_task_id):

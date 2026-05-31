@@ -43,7 +43,7 @@ def create_event(summary, start_time_str, end_time_str, description=""):
                 'timeZone': 'Asia/Ho_Chi_Minh',
             },
             'end': {
-                'dateTime': end_time_str, # Thêm thời gian kết thúc chuẩn ở đây
+                'dateTime': end_time_str, 
                 'timeZone': 'Asia/Ho_Chi_Minh',
             },
         }
@@ -59,10 +59,10 @@ def get_logged_in_user_email():
     của tài khoản đang đăng nhập hiện tại trong token.json
     """
     try:
-        # Gọi lại hàm lấy service bạn đã viết ở trên
+
         service = get_calendar_service()
         
-        # Lấy thông tin chi tiết của bộ lịch chính ('primary') - chính là email của chủ tài khoản
+        # Lấy thông tin chi tiết của bộ lịch chính ('primary') - chính là email của chủ tài khoản đăng nhập
         calendar_metadata = service.calendars().get(calendarId='primary').execute()
         
         # Trường 'id' của lịch primary luôn luôn trả về địa chỉ Email (VD: nguyenthetam@gmail.com)

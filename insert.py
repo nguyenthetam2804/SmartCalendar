@@ -245,6 +245,3 @@ def run_agent(email_text: str) -> dict:
 
     return status_report
  
-if __name__ == "__main__":
-    # # Test case: giờ cố định do người dùng chỉ định
-    run_agent("Dời lịch Luyện đề và học thuật nâng cao môn Hệ quản trị cơ sở dữ liệu ngày 2026-06-03 sang 10:00 2026-05-31")

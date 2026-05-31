@@ -34,7 +34,7 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
 
-# ==================== CẤU HÌNH ====================
+# CẤU HÌNH 
 
 # Quyền truy cập Gmail: đọc mail + đánh dấu đã đọc
 SCOPES = [
@@ -60,10 +60,6 @@ AUTO_LABELS = [
     'CATEGORY_FORUMS',      # Tab Diễn đàn
     'CATEGORY_SOCIAL'       # Tab Mạng xã hội
 ]
-
-# ==================================================
-
-
 class GmailWorker:
     """
     Class chính của Gmail Module.
@@ -78,9 +74,7 @@ class GmailWorker:
         self._service     = build('gmail', 'v1', credentials=self._credentials)
         print(" Gmail Worker sẵn sàng!\n")
 
-    # ────────────────────────────────────────────
     #   XÁC THỰC GOOGLE (OAuth2)
-    # ────────────────────────────────────────────
 
     def _authenticate(self):
         """
@@ -92,7 +86,6 @@ class GmailWorker:
         """
         creds = None
 
-        # SỬA TẠI ĐÂY: Đổi từ 'token_gmail.json' thành TOKEN_FILE ('token.json') chung của hệ thống
         if os.path.exists(TOKEN_FILE):
             creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
 
@@ -105,16 +98,13 @@ class GmailWorker:
                 flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
                 creds = flow.run_local_server(port=0)
 
-            # SỬA TẠI ĐÂY: Ghi đè vào duy nhất file TOKEN_FILE ('token.json') chung
             with open(TOKEN_FILE, 'w') as f:
                 f.write(creds.to_json())
             print(" Xác thực thành công! Đã lưu token đồng bộ Gmail và Calendar.")
 
         return creds
 
-    # ────────────────────────────────────────────
     #   LỌC SPAM - 4 TẦNG
-    # ────────────────────────────────────────────
 
     def _is_google_spam(self, label_ids):
         """
@@ -234,9 +224,7 @@ class GmailWorker:
 
         return False, ""
 
-    # ────────────────────────────────────────────
     #   TRÍCH XUẤT NỘI DUNG EMAIL
-    # ────────────────────────────────────────────
 
     def _extract_body(self, payload):
         """
@@ -286,9 +274,7 @@ class GmailWorker:
         _walk(payload['parts'])
         return plain_text or html_text
 
-    # ────────────────────────────────────────────
     #   ĐÁNH DẤU ĐÃ ĐỌC
-    # ────────────────────────────────────────────
 
     def mark_as_read(self, msg_id):
         """
@@ -309,9 +295,7 @@ class GmailWorker:
         except Exception as e:
             print(f"  Không thể đánh dấu đã đọc: {e}")
 
-    # ────────────────────────────────────────────
     #   HÀM CHÍNH: LẤY EMAIL MỚI
-    # ────────────────────────────────────────────
 
     def get_new_emails(self):
         """
@@ -438,21 +422,3 @@ class GmailWorker:
         while True:
             schedule.run_pending()
             time.sleep(1)
-
-
-# ==================== CHẠY TRỰC TIẾP (TEST) ====================
-
-if __name__ == '__main__':
-    worker = GmailWorker()
-
-    emails = worker.get_new_emails()
-
-    for email in emails:
-        print(f"\n--- EMAIL ---")
-        print(f"Subject: {email['subject']}")
-        print(f"Sender : {email['sender']}")
-        print(f"Body   : {email['body'][:200]}...")
-        print("-------------")
-
-        # Đánh dấu đã đọc sau khi xử lý
-        worker.mark_as_read(email['id'])
