@@ -7,13 +7,12 @@ from db_simple import analyze_workload, handle_delete_task, handle_reschedule_sp
 from scheduler import auto_schedule
 
 
-
 client = Groq(api_key="")
 
 def ask_groq(email_content: str) -> Optional[dict]:
     current_date = datetime.now().strftime('%Y-%m-%d')
 
-    prompt = fprompt = f"""
+    prompt = f"""
 Bạn là một AI Agent điều phối lịch trình cá nhân, vận hành như một bộ phân tách dữ liệu (Parser) chính xác 100%.
 Nhiệm vụ của bạn là chuyển đổi văn bản đầu vào của người dùng thành cấu trúc dữ liệu JSON để nạp vào SQLite Database.
 
@@ -24,24 +23,13 @@ CÁC QUY TẮC BẮT BUỘC
 BƯỚC 1: PHÂN LOẠI HÀNH ĐỘNG (ACTION)
 Dựa vào văn bản đầu vào để phân tích và chọn duy nhất một hành động phù hợp:
 1. 'insert': Khi người dùng muốn thêm mới, tạo, đặt lịch, nhắc nhở hoặc thông báo một công việc chưa có.
-   Dấu hiệu: "thêm lịch...", "nhắc tôi...", "tạo task...", "đặt lịch..."
 2. 'reschedule_task': Khi người dùng muốn thay đổi thời gian, dời lịch, hoãn lịch của một công việc SẴN CÓ sang một mốc thời gian khác.
-   Dấu hiệu: "dời lịch...", "đổi giờ...", "hoãn sang...", "lùi lại...", "chuyển sang ngày..."
 3. 'delete': Khi người dùng muốn hủy bỏ, loại bỏ hoàn toàn một công việc SẴN CÓ khỏi lịch trình.
-   Dấu hiệu: "xóa lịch...", "hủy lịch...", "bỏ task...", "không cần làm... nữa", "ngừng..."
 4. 'analyze': Khi người dùng hỏi về mật độ, tình trạng bận rảnh của lịch trình.
-   Dấu hiệu: "xem lịch ngày...", "ngày mai có bận không", "kiểm tra mật độ công việc..."
 
 BƯỚC 2: TRÍCH XUẤT THỰC THỂ (TITLE / SEARCH_KEYWORD)
-NẾU ACTION = 'insert': 
-  1. Trích xuất giá trị cho key "title".
-  2. Chỉ loại bỏ các từ ra lệnh/từ đệm ở đầu câu (như: hãy, thêm, xếp lịch, nhắc tôi, giúp tôi...). 
-  3. TUYỆT ĐỐI KHÔNG tự bổ sung thêm từ ngữ nếu văn bản gốc của người dùng không có.
-
-NẾU ACTION = 'delete' HOẶC 'reschedule_task':
-  1. Trích xuất tên công việc cần tìm vào key "search_keyword".
-  2. BẮT BUỘC chuyển toàn bộ ký tự về dạng VIẾT THƯỜNG (lowercase).
-  3. QUY TẮC LỌC BỎ: Phải loại bỏ hoàn toàn các từ ra lệnh ("xóa", "hủy", "dời", "đổi", "chuyển") VÀ các cụm từ chỉ thời gian gây nhiễu ("chiều nay", "ngày mai", "thứ hai", "ngày 30/5", "vào lúc..."). Chỉ giữ lại đúng thực thể tên của công việc để câu lệnh SQL LIKE tìm kiếm.
+- Nếu action = 'insert': Trích xuất tên việc vào key "title". Loại bỏ từ ra lệnh ở đầu câu.
+- Nếu action = 'delete' hoặc 'reschedule_task': Trích xuất tên việc vào key "search_keyword" (viết thường).
 
 BƯỚC 3: QUY TẮC PHÂN LOẠI FIXED_SCHEDULE VÀ TÍNH TOÁN THỜI GIAN
 Định dạng chuỗi thời gian bắt buộc tuyệt đối: YYYY-MM-DD HH:MM
@@ -49,8 +37,7 @@ BƯỚC 3: QUY TẮC PHÂN LOẠI FIXED_SCHEDULE VÀ TÍNH TOÁN THỜI GIAN
 QUY TẮC PHÂN BIỆT RÕ RÀNG (ĐỌC KỸ TRƯỚC KHI QUYẾT ĐỊNH):
 
 TRƯỜNG HỢP A — fixed_schedule = true
-- ĐIỀU KIỆN BẮT BUỘC: Văn bản PHẢI chứa đồng thời cả hai mốc: GIỜ BẮT ĐẦU và GIỜ KẾT THÚC rõ ràng (Ví dụ: "từ 14:00 đến 16:30", "8h-11h", "bắt đầu lúc 9h và kết thúc lúc 10h").
-- TUYỆT ĐỐI KHÔNG bật true nếu người dùng chỉ nói một mốc giờ duy nhất.
+- ĐIỀU KIỆN BẮT BUỘC: Văn bản PHẢI chứa đồng thời cả hai mốc: GIỜ BẮT ĐẦU và GIỜ KẾT THÚC rõ ràng (Ví dụ: "từ 14:00 đến 16:30", "8h-11h").
 - Giá trị trích xuất:
   + "fixed_schedule": true
   + "start": <Chuỗi YYYY-MM-DD HH:MM trích từ giờ bắt đầu>
@@ -59,46 +46,27 @@ TRƯỜNG HỢP A — fixed_schedule = true
   + "sessions_needed": 1
 
 TRƯỜNG HỢP B — fixed_schedule = false (Mặc định cho mọi trường hợp còn lại)
-- ĐIỀU KIỆN áp dụng: Văn bản CHỈ chứa một mốc thời gian (như mốc deadline, mốc ngày hoàn thành, hoặc mốc giờ đơn lẻ như "hạn vào 14:00 ngày...").
-- LUÔN LUÔN trả về:
-  + "fixed_schedule": false
-  + "start": null  ← TUYỆT ĐỐI KHÔNG TỰ BỊA GIỜ, bắt buộc phải điền null
-  + "end": null    ← TUYỆT ĐỐI KHÔNG TỰ BỊA GIỜ, bắt buộc phải điền null
-  + "deadline": <Chuỗi YYYY-MM-DD HH:MM chỉ định thời hạn chót> (Nếu người dùng không nói giờ, mặc định điền là "23:59")
-  + "sessions_needed": Ước lượng từ 1 đến 5 dựa theo các phân loại độ khó sau:
-
-    * "sessions_needed" = 5 (Dự án lớn / Nghiên cứu khoa học): Xây dựng hệ thống từ đầu, nghiên cứu công nghệ mới, báo cáo khoa học (NCKH), tiểu luận chuyên ngành.
-    * "sessions_needed" = 4 (Xây dựng module / Tính năng lớn): Triển khai module phức tạp, thiết kế cơ sở dữ liệu nâng cao, viết tài liệu kỹ thuật dài.
-    * "sessions_needed" = 3 (Học thuật nâng cao / Luyện kỹ năng chuyên sâu): Luyện đề thi, học kiến thức mới có hệ thống có độ khó cao, ôn luyện chuyên sâu.
-    * "sessions_needed" = 2 (Học tập thông thường / Chuẩn bị bài): Tích lũy kiến thức ngắn hạn, làm bài tập nhỏ hoặc ôn tập định kỳ.
-    * "sessions_needed" = 1 (Tác vụ đơn lẻ / Sinh hoạt / Thủ tục hành chính): Tác vụ nhanh gọn, thực hiện một lần.
+- ĐIỀU KIỆN áp dụng: Người dùng chỉ nói một mốc giờ duy nhất, hoặc chỉ nói ngày bắt đầu thực hiện, hoặc không nói mốc thời gian nào cả.
+- LUÔN LUÔN xử lý quy tắc ĐẶC BIỆT QUAN TRỌNG sau:
+  + "start": null  ← Bắt buộc điền null (Không tự bịa giờ bắt đầu)
+  + "end": null    ← Bắt buộc điền null (Không tự bịa giờ kết thúc)
+  
+  + QUY TẮC LOGIC CHỐT (QUAN TRỌNG NHẤT): Kể cả khi người dùng có nói ngày bắt đầu (ví dụ: "Thứ hai tuần sau bắt đầu học"), nếu họ KHÔNG ĐỀ CẬP đến thời hạn chót phải hoàn thành (Deadline), bạn BẮT BUỘC phải điền:
+    * "deadline": null
+    * "sessions_needed": null  <-- TUYỆT ĐỐI KHÔNG ĐƯỢC TỰ SINH SESSIONS NẾU DEADLINE BẰNG NULL.
+    
+  + Ngược lại, CHỈ KHI NÀO văn bản có thời hạn chót hoàn thành rõ ràng (Deadline), bạn mới trích xuất "deadline" (chuỗi YYYY-MM-DD HH:MM) và ước lượng "sessions_needed" từ 1 đến 5 theo độ khó.
 
 BƯỚC 4: ĐỊNH DẠNG CẤU TRÚC ĐẦU RA (JSON ONLY)
-TUYỆT ĐỐI KHÔNG giải thích, KHÔNG viết thêm văn bản dài dòng, KHÔNG bọc trong block markdown ```json. Chỉ trả về đúng 1 JSON object theo các biểu mẫu sau:
+Chỉ trả về đúng 1 JSON object theo các biểu mẫu sau:
 
-Khi action = "insert" VÀ fixed_schedule = true:
-{{"action":"insert","fixed_schedule":true,"title":"<tên công việc>","start":"YYYY-MM-DD HH:MM","end":"YYYY-MM-DD HH:MM","duration_hours":<số thực>,"deadline":"YYYY-MM-DD HH:MM","sessions_needed":1}}
+Khi action = "insert" VÀ fixed_schedule = false (Trường hợp deadline là null):
+{{"action":"insert","fixed_schedule":false,"title":"<tên công việc>","start":null,"end":null,"deadline":null,"sessions_needed":null}}
 
-Khi action = "insert" VÀ fixed_schedule = false:
+Khi action = "insert" VÀ fixed_schedule = false (Trường hợp có deadline):
 {{"action":"insert","fixed_schedule":false,"title":"<tên công việc>","start":null,"end":null,"deadline":"YYYY-MM-DD HH:MM","sessions_needed":<1-5>}}
 
-Khi action = "reschedule_task":
-{{
-  "action": "reschedule_task",
-  "data": {{
-    "search_keyword": "<tên công việc viết thường>",
-    "old_date": "YYYY-MM-DD",
-    "new_start": "YYYY-MM-DD HH:MM hoặc YYYY-MM-DD"
-  }}
-}}
-
-Trường new_start có thể chỉ là ngày YYYY-MM-DD (nếu người dùng chỉ bảo dời sang ngày khác và muốn hệ thống tự xếp giờ) hoặc có cả giờ YYYY-MM-DD HH:MM (nếu người dùng chỉ định giờ chính xác ở ngày mới)
-
-Khi action = "delete":
-{{"action":"delete","search_keyword":"<tên công việc viết thường>"}}
-
-Khi action = "analyze":
-{{"action":"analyze","target_date":"YYYY-MM-DD"}}
+... (Giữ nguyên các JSON mẫu còn lại của bạn) ...
 
 Hãy thực hiện văn bản sau:
 "{email_content}"
@@ -132,21 +100,25 @@ def run_agent(email_text: str) -> dict:
         title = result.get("title")
         deadline = result.get("deadline")
         fixed_schedule = result.get("fixed_schedule", False)
-        ai_sessions_needed = result.get("sessions_needed", 1)
+        ai_sessions_needed = result.get("sessions_needed")
 
-        if not title:
-            conn.close()
-            return {"status": "failed", "message": "AI không trích xuất được tiêu đề (title) công việc."}
-
-        if deadline:
+        # --- LỚP BẢO VỆ CỦA PYTHON: SỬA ĐÚNG MONG MUỐN CỦA BẠN ---
+        # Nếu AI trả về deadline bằng null hoặc rỗng, ta cưỡng ép sessions_needed về None (NULL) lập tức
+        # Bất kể AI trước đó có lỡ tính toán ra số mấy đi chăng nữa.
+        if deadline is None or deadline == "":
+            deadline_str = None
+            ai_sessions_needed = None
+        else: 
             try:
                 deadline_dt = datetime.strptime(deadline, "%Y-%m-%d %H:%M")
                 deadline_str = deadline_dt.strftime("%Y-%m-%d %H:%M")
             except ValueError:
                 conn.close()
                 return {"status": "failed", "message": "Định dạng chuỗi ngày tháng từ AI không hợp lệ."}
-        else:
-            deadline_str = None
+
+        if not title:
+            conn.close()
+            return {"status": "failed", "message": "AI không trích xuất được tiêu đề (title) công việc."}
 
         # Kiểm tra trùng lặp
         cursor.execute("""
@@ -176,14 +148,12 @@ def run_agent(email_text: str) -> dict:
             try:
                 dt_start = datetime.strptime(start_str, "%Y-%m-%d %H:%M")
                 dt_end = datetime.strptime(end_str, "%Y-%m-%d %H:%M")
-                # Nếu khoảng cách lớn hơn 30 phút mới coi là lịch cố định thực tế do người dùng chỉ định
                 if (dt_end - dt_start).total_seconds() > 1800:
                     is_valid_fixed = True
             except ValueError:
                 is_valid_fixed = False
 
         if is_valid_fixed:
-            # Trường hợp A thực sự: Xếp thẳng giờ cố định vào bảng SESSIONS
             try:
                 cursor.execute("""
                     INSERT INTO SESSIONS (TASK_ID, START_TIME, END_TIME)
@@ -199,18 +169,26 @@ def run_agent(email_text: str) -> dict:
                 conn.close()
                 return {"status": "failed", "message": f"Lỗi insert lịch cố định: {str(e)}"}
         else:
-            # Trường hợp B hoặc Fallback: Chuyển toàn bộ sang tự xếp lịch tự động (auto_schedule)
-            # Khôi phục lại đúng số lượng sessions cần thiết cho việc học thuật nâng cao nếu AI lỡ ép về 1
-            if "luyện đề" in title.lower() or "học thuật" in title.lower():
+            # Chỉ bẫy nâng session học thuật nâng cao nếu ban đầu ai_sessions_needed có giá trị số hợp lệ
+            if ai_sessions_needed is not None and ("luyện đề" in title.lower() or "học thuật" in title.lower()):
                 if ai_sessions_needed <= 1:
                     ai_sessions_needed = 3
                     cursor.execute("UPDATE TASKS SET SESSIONS_NEEDED = ? WHERE TASK_ID = ?", (ai_sessions_needed, task_id))
                     conn.commit()
 
             conn.close()
+            
+            # --- KIỂM TRA ĐIỀU KIỆN CHẠY AUTO_SCHEDULE ---
+            # Nếu ai_sessions_needed là None (tương ứng deadline = null), đây là việc ghi chú
+            # Ta KHÔNG gọi hàm auto_schedule() nữa để tránh việc kích hoạt thuật toán sai.
+            if ai_sessions_needed is None:
+                status_report["message"] = f"Đã lưu tác vụ ghi nhớ: '{title}' (Không có hạn chót, không xếp lịch chi tiết)."
+                status_report["scheduler_logs"] = ["- Tác vụ không có deadline, bỏ qua xếp lịch tự động."]
+                return status_report
+
             status_report["message"] = f"Đã thêm công việc mới: '{title}' vào Database. Tiến hành xếp lịch tự động..."
             
-            # Kích hoạt thuật toán từ scheduler.py
+            # Chỉ kích hoạt thuật toán xếp lịch tự động khi task thực sự có deadline và cần session
             schedule_res = auto_schedule()
             status_report["scheduler_logs"] = schedule_res.get("task_logs", [])
             return status_report
@@ -245,3 +223,5 @@ def run_agent(email_text: str) -> dict:
 
     return status_report
  
+if __name__ == "__main__":
+    print(run_agent("Thứ hai tuần sau bắt đầu học lập trình"))

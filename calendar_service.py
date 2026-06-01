@@ -12,20 +12,18 @@ SCOPES = [
     'https://www.googleapis.com/auth/tasks'
 ]
 TOKEN_FILE = 'token.json'
+
 def get_calendar_service():
     creds = None
-    # File token.json lưu trữ quyền đăng nhập của người dùng
     if os.path.exists('token.json'):
         creds = Credentials.from_authorized_user_file('token.json', SCOPES)
     
-    # Nếu không có token hợp lệ, bắt đầu đăng nhập
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
             flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
             creds = flow.run_local_server(port=0)
-        # Lưu lại token cho lần sau
         with open('token.json', 'w') as token:
             token.write(creds.to_json())
 
@@ -49,24 +47,28 @@ def create_event(summary, start_time_str, end_time_str, description=""):
         }
 
         event = service.events().insert(calendarId='primary', body=event).execute()
-        return True, event.get('htmlLink')
+        raw_id = event.get('id')
+        
+        if raw_id and raw_id.startswith('_'):
+            raw_id = raw_id[1:]
+            
+        return True, raw_id
     except Exception as e:
         return False, str(e)
     
 def get_logged_in_user_email():
-    """
-    Tự động gọi Google API để lấy chính xác địa chỉ Email 
-    của tài khoản đang đăng nhập hiện tại trong token.json
-    """
     try:
-
         service = get_calendar_service()
-        
-        # Lấy thông tin chi tiết của bộ lịch chính ('primary') - chính là email của chủ tài khoản đăng nhập
         calendar_metadata = service.calendars().get(calendarId='primary').execute()
-        
-        # Trường 'id' của lịch primary luôn luôn trả về địa chỉ Email (VD: nguyenthetam@gmail.com)
         return calendar_metadata.get('id')
     except Exception as e:
         print(f"Lỗi lấy thông tin email: {e}")
         return None
+
+def delete_event(event_id, calendar_id='primary'):
+    service = get_calendar_service()
+    clean_id = str(event_id).strip()
+    if clean_id.startswith('_'):
+        clean_id = clean_id[1:]
+    service.events().delete(calendarId=calendar_id, eventId=clean_id).execute()
+    return True

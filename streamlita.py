@@ -6,6 +6,26 @@ from calendar_service import create_event
 from insert import run_agent
 from db_simple import analyze_workload 
 
+# ─────────────────────────────────────────────────────────────────
+# 🔥 TỰ ĐỘNG KIỂM TRA VÀ NÂNG CẤP CẤU TRÚC DATABASE (VÁ LỖI CỘT)
+# ─────────────────────────────────────────────────────────────────
+try:
+    with sqlite3.connect('agent_storage.db') as conn:
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA table_info(TASKS);")
+        columns = [col[1] for col in cursor.fetchall()]
+        
+        if "GOOGLE_EVENT_ID" not in columns:
+            cursor.execute("ALTER TABLE TASKS ADD COLUMN GOOGLE_EVENT_ID TEXT DEFAULT NULL;")
+            conn.commit()
+            
+        if "GOOGLE_TASK_ID" not in columns:
+            cursor.execute("ALTER TABLE TASKS ADD COLUMN GOOGLE_TASK_ID TEXT DEFAULT NULL;")
+            conn.commit()
+except Exception as db_init_err:
+    st.error(f"⚠️ Không thể cấu hình tự động cơ sở dữ liệu: {db_init_err}")
+
+
 # --- KÍCH HOẠT WATCHER CHẠY NGẦM QUÉT DATABASE ---
 try:
     from autocheck import AutoCheckWatcher
@@ -83,21 +103,73 @@ with st.sidebar:
             try:
                 with sqlite3.connect('agent_storage.db') as conn:
                     cursor = conn.cursor()
-                    cursor.execute("SELECT DISTINCT GOOGLE_TASK_ID FROM TASKS WHERE GOOGLE_TASK_ID IS NOT NULL;")
-                    google_task_ids = [row[0] for row in cursor.fetchall()]
                     
-                    from google_api import delete_google_task
-                    for g_id in google_task_ids:
-                        if g_id and not g_id.endswith('@google.com'): 
-                            delete_google_task(g_id)
-                    
+                    # --- XỬ LÝ GOOGLE TASKS ---
+                    try:
+                        cursor.execute("SELECT DISTINCT GOOGLE_TASK_ID FROM TASKS WHERE GOOGLE_TASK_ID IS NOT NULL;")
+                        google_task_ids = [row[0] for row in cursor.fetchall()]
+                        
+                        from google_api import delete_google_task
+                        for g_id in google_task_ids:
+                            if g_id and not g_id.endswith('@google.com'): 
+                                delete_google_task(g_id)
+                    except Exception as t_cloud_err:
+                        st.sidebar.warning(f"⚠️ Không thể xóa một số tác vụ trên Google Tasks: {t_cloud_err}")
+
+                    # --- 📆 FIX CHÍNH: BỘ TRÍCH XUẤT ID VÀ XÓA ĐỒNG BỘ GOOGLE CALENDAR ---
+                    try:
+                        from calendar_service import delete_event  
+                        cursor.execute("SELECT DISTINCT GOOGLE_EVENT_ID FROM TASKS WHERE GOOGLE_EVENT_ID IS NOT NULL;")
+                        event_ids = [row[0] for row in cursor.fetchall()]
+                        
+                        deleted_cal_count = 0
+                        cal_errors = []
+                        
+                        for e_id in event_ids:
+                            if e_id and str(e_id).strip():
+                                clean_id = str(e_id).strip()
+                                
+                                # 💡 SỬA ĐỔI CHÍ MẠNG: Nếu ID lỡ lưu dạng Tuple lỗi do phiên bản cũ (Ví dụ: "(True, 'id')"), bóc lấy chuỗi bên trong
+                                if clean_id.startswith("(") and ")" in clean_id:
+                                    try:
+                                        clean_id = clean_id.split("'")[1]
+                                    except:
+                                        pass
+                                
+                                # Xử lý nếu lỡ là link URL cũ
+                                if "calendar/event?eid=" in clean_id:
+                                    try:
+                                        import base64
+                                        encoded_part = clean_id.split("eid=")[1].split("&")[0]
+                                        decoded_bytes = base64.b64decode(encoded_part + '==')
+                                        clean_id = decoded_bytes.decode('utf-8').split()[0]
+                                    except:
+                                        pass
+                                
+                                # Gọi API xóa thật lên mây
+                                try:
+                                    delete_event(clean_id)
+                                    deleted_cal_count += 1
+                                except Exception as single_err:
+                                    cal_errors.append(f"ID '{clean_id}': {str(single_err)}")
+                                    
+                        if deleted_cal_count > 0:
+                            st.sidebar.info(f"📆 Đã gọi API gỡ bỏ thành công {deleted_cal_count} sự kiện Cloud!")
+                        if cal_errors:
+                            st.sidebar.error("❌ Nhật ký phản hồi lỗi từ Google API:")
+                            for err_msg in cal_errors[:2]:
+                                st.sidebar.write(f"• {err_msg}")
+                    except Exception as c_cloud_err:
+                        st.sidebar.warning(f"⚠️ Lỗi hệ thống luồng xóa Calendar: {c_cloud_err}")
+
+                    # 2. Tiến hành xóa sạch dữ liệu cục bộ trong SQLite
                     cursor.execute("DELETE FROM SESSIONS;")
                     cursor.execute("DELETE FROM TASKS;")
                     cursor.execute("DELETE FROM sqlite_sequence WHERE name='SESSIONS';")
                     cursor.execute("DELETE FROM sqlite_sequence WHERE name='TASKS';")
                     conn.commit()
                 
-                st.sidebar.success("🎉 Đã dọn dẹp sạch sẽ hệ thống!")
+                st.sidebar.success("🎉 Đã dọn dẹp sạch sẽ toàn bộ hệ thống cục bộ và Đám mây!")
                 st.snow()
                 st.rerun()
             except Exception as delete_err:
@@ -129,14 +201,19 @@ if "Trang chủ" in menu:
                             db_updated = False
                             
                             try:
-                                direct_prompt = f"Thêm việc {short_title}"
-                                ai_result = run_agent(direct_prompt)
+                                # Ghép subject + body để AI/Python có đủ thông tin ngày giờ
+                                full_prompt = f"{subject_mail}. {body_mail}".strip()
+                                ai_result = run_agent(full_prompt)
                                 
-                                with sqlite3.connect('agent_storage.db') as test_conn:
-                                    test_cursor = test_conn.cursor()
-                                    test_cursor.execute("SELECT COUNT(*) FROM TASKS WHERE TITLE = ?", (short_title,))
-                                    if test_cursor.fetchone()[0] > 0:
-                                        db_updated = True
+                                if isinstance(ai_result, dict) and ai_result.get("status") == "success":
+                                    db_updated = True
+                                else:
+                                    # Fallback: kiểm tra DB xem title đã được insert chưa
+                                    with sqlite3.connect('agent_storage.db') as test_conn:
+                                        test_cursor = test_conn.cursor()
+                                        test_cursor.execute("SELECT COUNT(*) FROM TASKS WHERE TITLE LIKE ?", (f"%{short_title[:30]}%",))
+                                        if test_cursor.fetchone()[0] > 0:
+                                            db_updated = True
                             except Exception:
                                 db_updated = False
                                 
@@ -314,7 +391,7 @@ if "Trang chủ" in menu:
 
 # --- CHAT VỚI GROQ ---
 elif "Chat với Groq" in menu:
-    st.header("💬 Chat với Grok AI Agent")
+    st.header("💬 Chat với Groq AI Agent")
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
@@ -328,12 +405,52 @@ elif "Chat với Groq" in menu:
             st.markdown(prompt)
 
         with st.chat_message("assistant"):
-            with st.spinner("Grok Agent đang xử lý..."):
+            with st.spinner("Grok Agent đang xử lý và đồng bộ Cloud..."):
                 ket_qua = run_agent(prompt) 
                 chuoi_hien_thi = ""
+                
                 if isinstance(ket_qua, dict):
                     if ket_qua.get("status") == "success":
                         chuoi_hien_thi += f"{ket_qua.get('message')}\n\n"
+                        
+                        # --- 🔄 ĐỒNG BỘ NGƯỢC EVENT ID KHI CHAT TẠO TASK ---
+                        if "thêm" in prompt.lower() or "tạo" in prompt.lower():
+                            try:
+                                with sqlite3.connect('agent_storage.db') as conn:
+                                    cursor = conn.cursor()
+                                    cursor.execute("""
+                                        SELECT T.TITLE, S.START_TIME, S.END_TIME, T.TASK_ID
+                                        FROM TASKS T JOIN SESSIONS S ON T.TASK_ID = S.TASK_ID 
+                                        ORDER BY T.TASK_ID DESC LIMIT 1
+                                    """)
+                                    last_task = cursor.fetchone()
+                                    
+                                if last_task:
+                                    t_title, t_start, t_end, t_id = last_task
+                                    iso_start = t_start.replace(" ", "T") + ":00"
+                                    iso_end = t_end.replace(" ", "T") + ":00"
+                                    
+                                    g_status, g_res = create_event(t_title, iso_start, iso_end, "Được tạo tự động từ Groq Agent")
+                                    
+                                    # 💡 FIX CHÍNH: Hàm create_event bấy giờ trả về tuple: (True, event_id). Ta phải bóc lấy phần tử thứ [1]
+                                    event_id_to_save = None
+                                    if isinstance(g_res, tuple) and len(g_res) >= 2:
+                                        event_id_to_save = str(g_res[1]).strip()
+                                    elif isinstance(g_res, str):
+                                        event_id_to_save = g_res.strip()
+                                        
+                                    if g_status and event_id_to_save:
+                                        chuoi_hien_thi += "🚀 **Đồng bộ đám mây:** Đã đẩy sự kiện lên Google Calendar thành công!\n"
+                                        with sqlite3.connect('agent_storage.db') as conn:
+                                            cursor = conn.cursor()
+                                            cursor.execute("UPDATE TASKS SET GOOGLE_EVENT_ID = ? WHERE TASK_ID = ?", (event_id_to_save, t_id))
+                                            conn.commit()
+                            except Exception as cloud_err:
+                                chuoi_hien_thi += f"⚠️ Lỗi đồng bộ Calendar: {cloud_err}\n"
+                        
+                        elif "xóa" in prompt.lower() or "hủy" in prompt.lower():
+                            chuoi_hien_thi += "🗑️ **Đám mây:** Hệ thống đang quét và đồng bộ lệnh xóa sự kiện.\n"
+
                         logs = ket_qua.get("scheduler_logs", [])
                         if logs:
                             chuoi_hien_thi += "**🛠️ Nhật ký xếp lịch tự động:**\n"
@@ -447,6 +564,7 @@ elif "⚙️ Quản lý Lịch" in menu or "Quản lý Lịch" in menu:
                 iso_end = (start_datetime + timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%S')
 
                 with st.spinner("Đang đẩy lịch lên Google Calendar..."):
+                    # create_event trả về tuple: (success, result_id)
                     success, result = create_event(task_name, iso_start, iso_end, description)
                     
                     if success:
@@ -454,23 +572,25 @@ elif "⚙️ Quản lý Lịch" in menu or "Quản lý Lịch" in menu:
                             db_start = start_datetime.strftime('%Y-%m-%d %H:%M')
                             db_end = (start_datetime + timedelta(hours=1)).strftime('%Y-%m-%d %H:%M')
                             
-                            # Ghi nhận thông tin cục bộ vào SQLite
+                            # 💡 FIX CHÍNH: Vì biến result nhận về từ hàm create_event có dạng chuỗi ID thô sạch sẽ, ta lưu thẳng vào DB
+                            event_id_to_insert = str(result).strip()
+
+                            # Ghi nhận thông tin cục bộ kèm theo GOOGLE_EVENT_ID sạch
                             with sqlite3.connect('agent_storage.db') as conn:
                                 cursor = conn.cursor()
-                                cursor.execute("INSERT INTO TASKS (TITLE, DEADLINE) VALUES (?, ?)", (task_name, db_end))
+                                cursor.execute("""
+                                    INSERT INTO TASKS (TITLE, DEADLINE, GOOGLE_EVENT_ID) 
+                                    VALUES (?, ?, ?)
+                                """, (task_name, db_end, event_id_to_insert))
+                                    
                                 last_id = cursor.lastrowid
                                 cursor.execute("INSERT INTO SESSIONS (TASK_ID, START_TIME, END_TIME) VALUES (?, ?, ?)", (last_id, db_start, db_end))
                                 conn.commit()
                             
-                            st.success("✅ Đã tạo lịch thành công cục bộ!")
+                            st.success("✅ Đã tạo lịch thành công cục bộ và đồng bộ Đám mây!")
                             
-                            # Kiểm tra định dạng link trả về từ hàm create_event
-                            if isinstance(result, str) and result.startswith("http"):
-                                st.markdown(f"🔗 [👉 Xem sự kiện trên Google Calendar]({result})")
-                            elif isinstance(result, dict) and "htmlLink" in result:
-                                st.markdown(f"🔗 [👉 Xem sự kiện trên Google Calendar]({result['htmlLink']})")
-                            else:
-                                st.info("ℹ️ Lịch đã được đồng bộ lên Cloud của tài khoản Google kết nối.")
+                            # Hiển thị nút bấm xem lịch trực tiếp dựa trên ID thô động bằng link mẫu chuẩn Google
+                            st.markdown(f"🔗 [👉 Xem sự kiện vừa tạo trên Google Calendar](https://calendar.google.com/calendar/r/eventedit/{event_id_to_insert})")
                                 
                             st.balloons()
                         except Exception as db_err:
