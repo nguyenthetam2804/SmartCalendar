@@ -2,7 +2,7 @@ import sqlite3
 from datetime import datetime, timedelta
 
 def create_database():
-    # Kết nối đến file agent_storage để lấy dtb (các table phía dưới đuôi lưu tại đây)
+    # Kết nối đến file agent_storage để lấy dtb 
     conn = sqlite3.connect('agent_storage.db') 
     cursor = conn.cursor()
     

@@ -11,7 +11,6 @@ SCOPES = [
     'https://www.googleapis.com/auth/tasks'          # Quyền Tasks (Mới thêm)
 ]
 
-# Chỉ dùng duy nhất 1 file cấu hình cho toàn hệ thống
 TOKEN_FILE = 'token.json'
 
 def get_google_service():

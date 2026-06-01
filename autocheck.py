@@ -68,7 +68,7 @@ def _watch_loop(poll_interval: int, db_path: str, stop_event: threading.Event):
                 if curr_unscheduled > 0:
                     log.info(f"Tiến hành xếp lịch cho {curr_unscheduled} task...")
 
-                    result = auto_schedule(db_path=db_path)  # FIX: bỏ sessions_per_task không tồn tại
+                    result = auto_schedule(db_path=db_path) 
                     scheduled_count = len(result.get("scheduled", []))
 
                     if scheduled_count > 0:

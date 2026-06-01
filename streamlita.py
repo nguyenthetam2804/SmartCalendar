@@ -6,9 +6,6 @@ from calendar_service import create_event
 from insert import run_agent
 from db_simple import analyze_workload 
 
-# ─────────────────────────────────────────────────────────────────
-# 🔥 TỰ ĐỘNG KIỂM TRA VÀ NÂNG CẤP CẤU TRÚC DATABASE (VÁ LỖI CỘT)
-# ─────────────────────────────────────────────────────────────────
 try:
     with sqlite3.connect('agent_storage.db') as conn:
         cursor = conn.cursor()
@@ -116,7 +113,6 @@ with st.sidebar:
                     except Exception as t_cloud_err:
                         st.sidebar.warning(f"⚠️ Không thể xóa một số tác vụ trên Google Tasks: {t_cloud_err}")
 
-                    # --- 📆 FIX CHÍNH: BỘ TRÍCH XUẤT ID VÀ XÓA ĐỒNG BỘ GOOGLE CALENDAR ---
                     try:
                         from calendar_service import delete_event  
                         cursor.execute("SELECT DISTINCT GOOGLE_EVENT_ID FROM TASKS WHERE GOOGLE_EVENT_ID IS NOT NULL;")
@@ -129,14 +125,12 @@ with st.sidebar:
                             if e_id and str(e_id).strip():
                                 clean_id = str(e_id).strip()
                                 
-                                # 💡 SỬA ĐỔI CHÍ MẠNG: Nếu ID lỡ lưu dạng Tuple lỗi do phiên bản cũ (Ví dụ: "(True, 'id')"), bóc lấy chuỗi bên trong
                                 if clean_id.startswith("(") and ")" in clean_id:
                                     try:
                                         clean_id = clean_id.split("'")[1]
                                     except:
                                         pass
                                 
-                                # Xử lý nếu lỡ là link URL cũ
                                 if "calendar/event?eid=" in clean_id:
                                     try:
                                         import base64
@@ -146,7 +140,6 @@ with st.sidebar:
                                     except:
                                         pass
                                 
-                                # Gọi API xóa thật lên mây
                                 try:
                                     delete_event(clean_id)
                                     deleted_cal_count += 1
@@ -432,7 +425,6 @@ elif "Chat với Groq" in menu:
                                     
                                     g_status, g_res = create_event(t_title, iso_start, iso_end, "Được tạo tự động từ Groq Agent")
                                     
-                                    # 💡 FIX CHÍNH: Hàm create_event bấy giờ trả về tuple: (True, event_id). Ta phải bóc lấy phần tử thứ [1]
                                     event_id_to_save = None
                                     if isinstance(g_res, tuple) and len(g_res) >= 2:
                                         event_id_to_save = str(g_res[1]).strip()
@@ -572,10 +564,8 @@ elif "⚙️ Quản lý Lịch" in menu or "Quản lý Lịch" in menu:
                             db_start = start_datetime.strftime('%Y-%m-%d %H:%M')
                             db_end = (start_datetime + timedelta(hours=1)).strftime('%Y-%m-%d %H:%M')
                             
-                            # 💡 FIX CHÍNH: Vì biến result nhận về từ hàm create_event có dạng chuỗi ID thô sạch sẽ, ta lưu thẳng vào DB
                             event_id_to_insert = str(result).strip()
 
-                            # Ghi nhận thông tin cục bộ kèm theo GOOGLE_EVENT_ID sạch
                             with sqlite3.connect('agent_storage.db') as conn:
                                 cursor = conn.cursor()
                                 cursor.execute("""
@@ -589,7 +579,6 @@ elif "⚙️ Quản lý Lịch" in menu or "Quản lý Lịch" in menu:
                             
                             st.success("✅ Đã tạo lịch thành công cục bộ và đồng bộ Đám mây!")
                             
-                            # Hiển thị nút bấm xem lịch trực tiếp dựa trên ID thô động bằng link mẫu chuẩn Google
                             st.markdown(f"🔗 [👉 Xem sự kiện vừa tạo trên Google Calendar](https://calendar.google.com/calendar/r/eventedit/{event_id_to_insert})")
                                 
                             st.balloons()

@@ -69,7 +69,6 @@ def _get_free_slots_in_day(cursor, target_date: date, pending_sessions: list[dic
     return free_slots
 
 def _find_free_day(cursor, from_day: date, deadline_day: Optional[date], pending_sessions: list[dict], look_ahead: int = 60) -> Optional[date]:
-    # FIX 1: Không khóa chết tiến trình ở deadline_day nữa để tránh mất lịch khi sát nút.
     # Cho phép hệ thống quét tìm slot thoải mái trong khoảng look_ahead ngày.
     limit = from_day + timedelta(days=look_ahead)
     d = from_day
@@ -141,7 +140,6 @@ def _schedule_one_task(cursor,
                 current_session_end = slot_end
             else:
                 # Bị ngắt quãng do dính khung giờ cấm -> Chốt session cũ
-                # FIX 2: Chỉ lưu nếu session nối dài này bõ công làm (Tối thiểu >= 1 tiếng)
                 duration = (current_session_end - current_session_start).total_seconds() / 3600
                 if duration >= 1.0:
                     new_sessions.append({

@@ -180,7 +180,6 @@ def run_agent(email_text: str) -> dict:
             
             # --- KIỂM TRA ĐIỀU KIỆN CHẠY AUTO_SCHEDULE ---
             # Nếu ai_sessions_needed là None (tương ứng deadline = null), đây là việc ghi chú
-            # Ta KHÔNG gọi hàm auto_schedule() nữa để tránh việc kích hoạt thuật toán sai.
             if ai_sessions_needed is None:
                 status_report["message"] = f"Đã lưu tác vụ ghi nhớ: '{title}' (Không có hạn chót, không xếp lịch chi tiết)."
                 status_report["scheduler_logs"] = ["- Tác vụ không có deadline, bỏ qua xếp lịch tự động."]
